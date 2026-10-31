@@ -17,6 +17,7 @@ E:\ESP32开发
 ├─ docs\
 │  ├─ 设备信息.md        硬件判读 + 芯片实测数据 + 现有固件 + 实机验证进展
 │  ├─ 固件备份.md        16 MB 整片备份记录（大小/SHA256/恢复步骤）
+│  ├─ 工具链方案.md      装什么 + 各功能怎么开发 + 里程碑
 │  └─ img\               丝印、摄像头标签、接线标注等特写
 ├─ scripts\
 │  ├─ chip_info.ps1     一键探测板子（端口 / 芯片 / Flash / 分区）
@@ -97,11 +98,29 @@ cd E:\ESP32开发
 - [x] **整片 16 MB Flash 备份 + 校验**（13:51）
 - [x] **屏幕点亮**（40pin FPC，出厂 demo 正常显示 System 页）
 - [x] 摄像头安装（OV5640 已插入 24pin 座）
+- [x] 工具链方案规划（[docs/工具链方案.md](docs/工具链方案.md)）
 - [ ] 摄像头功能验证（跑一次 `esp_camera_init`，看能否出图）
+- [ ] 装 PlatformIO（M0：blink + 串口闭环）
 - [ ] 开发方案定稿 → 建项目仓库
+
+## 出厂 demo 的界面真相（从固件字符串表挖出来的）
+
+app 区 `0x1039e` 附近整张 UI 文案表：
+
+```
+system_task | app_wifi_task | System | QMI8658 | Camera | WiFi
+accel_x | accel_y | accel_z | gyro_x | gyro_y | gyro_z
+Chip | ESP32-S3 | ChipTemp | 0.0C | PSRAM | FLASH | SD | Battery | 0.0V
+WiFi STA Setting | 0.0.0.0 | PASS | No data
+```
+
+- 左栏四页 `System / QMI8658 / Camera / WiFi` 是**点按导航**（这套 demo 与触摸版共用），本机无触摸 → 点不动。
+- `WiFi STA Setting` 表明 Wi-Fi 页是**在屏上输 SSID/密码**的 STA 配置页，不是热点；NVS 里还留着微雪工厂测试的
+  `sta.ssid = WSTEST` / `sta.pswd = waveshare0755`（他们自己的测试路由，这里用不上）。
+- 结论：**出厂 demo 的 Camera 页在这块无触摸板上走不通**，验证摄像头只能靠刷自检固件（见工具链方案 M2）。
 
 ## 后续可做
 
-- 装 Arduino CLI 或 PlatformIO，写摄像头自检固件，验证 OV5640 是否真的通了
-- 用 BOOT 键切出厂 demo 的 `Camera` 页，零成本先看一眼有没有实时画面
+- 按 [docs/工具链方案.md](docs/工具链方案.md) 装 PlatformIO，跑 M0→M1→M2：blink / 点屏 / 摄像头自检
+- 摄像头自检顺带定论"FPC 到底接对没有"（`esp_camera_init` 返回 `ESP_OK` = 对）
 - 定方案后开工程：LVGL 界面 / 拍照图传 / SD 卡录像 / 传感器终端
