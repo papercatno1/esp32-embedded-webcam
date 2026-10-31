@@ -40,3 +40,7 @@ firmware_backup/
 
 # 本地备忘（不上传）
 /.local-notes.md
+# 家庭 Wi-Fi 凭据与本机网络信息（不上传）
+/网络信息/
+/调试截图/
+firmware/**/wifi_secrets.h

@@ -32,6 +32,21 @@ firmware/webcam/
    └─ www.h              网页（存在 Flash，不占 RAM）
 ```
 
+## 网络：优先连家里路由，连不上才开热点
+
+- 凭据放在 `src/wifi_secrets.h`（**已被 .gitignore 排除，不进仓库**），由 `wifi_config.h` 条件包含。
+  没有该文件时自动退回热点模式，代码依然能编译。
+- 连上路由后：板子出现在局域网里（实测 `192.168.88.32`），手机连同一个 Wi-Fi 即可访问。
+- 同时启用 **mDNS**：同一局域网里用 `http://esp32cam.local/` 访问，不用记 IP。
+- 15 秒连不上路由 → 自动开热点 `ESP32-LCD2-CAM / 12345678`（`192.168.4.1`），永远有兜底。
+
+凭据文件格式（键名固定）：
+
+```c
+#define WIFI_SSID "你家 WiFi 名"
+#define WIFI_PASS "密码"
+```
+
 ## 编译 / 烧录 / 看日志
 
 ```powershell

@@ -2,7 +2,9 @@
 
 工作目录：`E:\ESP32开发`
 设备：**微雪 Waveshare ESP32-S3-LCD-2**（2 寸 IPS 240×320，ESP32-S3R8 + 16MB Flash，板载摄像头接口 / TF 卡槽，屏幕无触摸）
-当前状态：**第一版"网页图传"固件已跑起来** —— 摄像头 `PID=0x5640`（OV5640）识别成功、热点 `ESP32-LCD2-CAM` 已开、HTTP 图传服务在线（详见 [firmware/webcam](firmware/webcam/README.md)）。
+当前状态：**第一版"网页图传"已跑通并接入家庭 Wi-Fi** —— 摄像头 `PID=0x5640`（OV5640）识别成功，
+板子局域网地址 `192.168.88.32`，也可用 `http://esp32cam.local/` 访问；视频流在 81 端口、控制面在 80 端口
+（详见 [firmware/webcam](firmware/webcam/README.md)）。
 
 ## 目录结构
 
@@ -42,13 +44,14 @@ E:\ESP32开发
 ## 网页图传（第一版）
 
 ```powershell
-cd E:\ESP32开发\firmware\webcam
-..\..\.venv\Scripts\python.exe -m platformio run -t upload     # 编译 + 烧录（COM16）
-..\..\.venv\Scripts\python.exe -m platformio device monitor -p COM16 -b 115200
+cd E:\ESP32开发
+.\scripts\flash.ps1                    # 编译 + 烧录 + 跟串口（推荐）
+.\scripts\verify_cam.py 192.168.88.32  # 端到端自测：状态/单帧/拍照/流与控制面并发
 ```
 
-上电后板子开热点 `ESP32-LCD2-CAM / 12345678`，手机连上打开 <http://192.168.4.1/> 即可看图。
-（想让板子连自家路由：填 `src/wifi_config.h` 里的 SSID/密码，15 秒连不上会自动退回热点。）
+上电后板子连家里 Wi-Fi，访问 `http://<板子IP>/` 或 `http://esp32cam.local/`；
+连不上路由时自动开热点 `ESP32-LCD2-CAM / 12345678`（`192.168.4.1`）。
+Wi-Fi 凭据放 `firmware/webcam/src/wifi_secrets.h`，**该文件不入库**。
 
 | 接口 | 作用 |
 | --- | --- |

@@ -9,6 +9,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <ESPmDNS.h>
 #include <SPI.h>
 #include <SD.h>
 #include <esp_camera.h>
@@ -120,17 +121,33 @@ static void init_sd() {
 }
 
 // ---------------- Wi-Fi ----------------
+static void start_mdns() {
+  if (MDNS.begin(MDNS_NAME)) {
+    MDNS.addService("http", "tcp", 80);
+    Serial.printf("[mDNS] http://%s.local/\n", MDNS_NAME);
+  } else {
+    Serial.println("[mDNS] 启动失败（用 IP 访问即可）");
+  }
+}
+
 static void start_wifi() {
   WiFi.persistent(false);
   if (strlen(WIFI_SSID) > 0) {
     Serial.printf("[WiFi] 连接 %s ...\n", WIFI_SSID);
     WiFi.mode(WIFI_STA);
+    WiFi.setHostname(MDNS_NAME);
     WiFi.begin(WIFI_SSID, WIFI_PASS);
     uint32_t t0 = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) { delay(300); Serial.print('.'); }
+    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) {
+      delay(300);
+      Serial.print('.');
+    }
     Serial.println();
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.printf("[WiFi] 已连接，IP: %s\n", WiFi.localIP().toString().c_str());
+      Serial.printf("[WiFi] 已连接，IP: %s，网关 %s，信号 %d dBm\n",
+                    WiFi.localIP().toString().c_str(),
+                    WiFi.gatewayIP().toString().c_str(), WiFi.RSSI());
+      start_mdns();
       return;
     }
     Serial.println("[WiFi] 连接超时，改用热点模式");
@@ -138,6 +155,7 @@ static void start_wifi() {
   WiFi.mode(WIFI_AP);
   WiFi.softAP(AP_SSID, AP_PASS);
   Serial.printf("[WiFi] 热点已开: %s / %s\n", AP_SSID, AP_PASS);
+  start_mdns();
 }
 
 static IPAddress cur_ip() {
@@ -468,9 +486,10 @@ void loop() {
   static uint32_t last_hb = 0, last_self = 0;
   if (millis() - last_hb > 5000) {
     last_hb = millis();
-    Serial.printf("[%lus] 帧:%lu fps:%.1f 观看:%d 堆:%luKB\n", millis() / 1000,
-                  (unsigned long)s_frame_count, (double)s_fps, s_viewers,
-                  (unsigned long)(ESP.getFreeHeap() / 1024));
+    int sta = (WiFi.getMode() == WIFI_AP) ? WiFi.softAPgetStationNum() : 0;
+    Serial.printf("[%lus] 帧:%lu fps:%.1f 观看:%d 已连设备:%d 堆:%luKB\n",
+                  millis() / 1000, (unsigned long)s_frame_count, (double)s_fps,
+                  s_viewers, sta, (unsigned long)(ESP.getFreeHeap() / 1024));
   }
   if (millis() - last_self > 60000) {
     last_self = millis();
