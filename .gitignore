@@ -37,3 +37,6 @@ firmware_backup/
 
 # ---- 独立的日志仓库（自带 .git，独立提交/推送） ----
 /日志/
+
+# 本地备忘（不上传）
+/.local-notes.md
