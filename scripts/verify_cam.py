@@ -37,7 +37,7 @@ def main() -> int:
     code, body = get(base + "/status.json")
     st = json.loads(body)
     print(f"[1] /status.json  {code}  {time.time()-t0:.2f}s")
-    for k in ("mode", "ip", "rssi", "res", "fps", "frames", "viewers", "heap", "sd"):
+    for k in ("mode", "ip", "rssi", "res", "fps", "frames", "viewers", "heap", "sd", "lcd"):
         print(f"      {k:8s} = {st.get(k)}")
 
     # 2) 单帧
@@ -95,3 +95,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

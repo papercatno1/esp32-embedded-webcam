@@ -14,6 +14,7 @@
 #include <SD.h>
 #include <esp_camera.h>
 #include <esp_http_server.h>
+#include <Arduino_GFX_Library.h>
 
 #include "camera_pins.h"
 #include "wifi_config.h"
@@ -38,6 +39,7 @@ static uint32_t s_last_push_ms = 0;
 struct Viewer {
   WiFiClient c;
   bool  active = false;
+  uint32_t last_ok = 0;   // 最近一次写成功的时刻，用来淘汰僵尸连接
 };
 
 static Viewer s_vs[MAX_VIEWERS];
@@ -162,6 +164,82 @@ static IPAddress cur_ip() {
   return (WiFi.getMode() == WIFI_AP) ? WiFi.softAPIP() : WiFi.localIP();
 }
 
+// ---------------- 屏幕（ST7789T3，240x320，SPI） ----------------
+// 引脚（官方原理图）：SCLK 39 / MOSI 38 / DC 42 / CS 45 / RST 未接 / BL 1
+#define LCD_BL_PIN 1
+static Arduino_DataBus *s_bus = nullptr;
+static Arduino_GFX     *s_gfx = nullptr;
+
+static void lcd_init() {
+  // 背光 PWM（5000Hz / 10bit）
+  ledcSetup(0, 5000, 10);
+  ledcAttachPin(LCD_BL_PIN, 0);
+  ledcWrite(0, 1023);
+
+  s_bus = new Arduino_ESP32SPI(42 /*DC*/, 45 /*CS*/, 39 /*SCK*/, 38 /*MOSI*/,
+                               GFX_NOT_DEFINED /*MISO*/);
+  s_gfx = new Arduino_ST7789(s_bus, GFX_NOT_DEFINED /*RST*/, 1 /*rotation 横屏*/,
+                             true /*IPS*/, 240, 320);
+  if (!s_gfx->begin(40000000)) {
+    Serial.println("[LCD] 初始化失败");
+    delete s_gfx; s_gfx = nullptr;
+    return;
+  }
+  s_gfx->fillScreen(BLACK);
+  s_gfx->setTextColor(WHITE);
+  s_gfx->setTextSize(2);
+  s_gfx->setCursor(10, 10);
+  s_gfx->println("BOOTING...");
+  Serial.println("[LCD] ST7789 就绪（320x240 横屏）");
+}
+
+static void lcd_status() {
+  if (!s_gfx) return;
+  const bool ap = (WiFi.getMode() == WIFI_AP);
+  IPAddress ip = cur_ip();
+
+  s_gfx->fillScreen(BLACK);
+  s_gfx->setTextSize(2);
+  s_gfx->setTextColor(0x07E0);                 // 绿
+  s_gfx->setCursor(8, 6);
+  s_gfx->print("ESP32-S3 CAM");
+  s_gfx->drawFastHLine(0, 28, 320, 0x3186);
+
+  s_gfx->setTextColor(WHITE);
+  s_gfx->setCursor(8, 38);
+  if (ap) {
+    s_gfx->setTextColor(0xFD20);               // 橙：热点模式
+    s_gfx->print("AP MODE");
+    s_gfx->setTextColor(WHITE);
+    s_gfx->setTextSize(3);
+    s_gfx->setCursor(8, 64);
+    s_gfx->print(ip.toString());
+    s_gfx->setTextSize(2);
+    s_gfx->setCursor(8, 100);
+    s_gfx->print(AP_SSID);
+  } else {
+    s_gfx->setTextSize(3);
+    s_gfx->print(ip.toString());
+    s_gfx->setTextSize(2);
+    s_gfx->setCursor(8, 74);
+    s_gfx->printf("%s.local", MDNS_NAME);
+  }
+
+  s_gfx->drawFastHLine(0, 112, 320, 0x3186);
+  s_gfx->setCursor(8, 122);
+  s_gfx->printf("WiFi  %d dBm", ap ? 0 : WiFi.RSSI());
+  s_gfx->setCursor(8, 146);
+  s_gfx->printf("%s  %.1f fps", s_res, (double)s_fps);
+  s_gfx->setCursor(8, 170);
+  s_gfx->printf("Viewers %d  Frames %lu", s_viewers, (unsigned long)s_frame_count);
+  s_gfx->setCursor(8, 194);
+  s_gfx->printf("SD   %s", s_sd_ok ? "OK" : "none");
+  s_gfx->setCursor(8, 218);
+  s_gfx->printf("Heap %lu KB", (unsigned long)(ESP.getFreeHeap() / 1024));
+  s_gfx->setCursor(8, 242);
+  s_gfx->printf("Up   %lu s", (unsigned long)(millis() / 1000));
+}
+
 // ---------------- 81 端口：MJPEG ----------------
 static void stream_accept() {
   WiFiClient nc = s_stream_srv.available();
@@ -171,6 +249,24 @@ static void stream_accept() {
   uint32_t t0 = millis();
   while (nc.available() == 0 && millis() - t0 < 300) delay(2);
   while (nc.available()) nc.read();
+
+  // 找空位；满了就淘汰"最久没写成功"的那个（刷新页面会留下僵尸连接）
+  int slot = -1;
+  for (int i = 0; i < MAX_VIEWERS; i++) {
+    if (!s_vs[i].active) { slot = i; break; }
+  }
+  if (slot < 0) {
+    uint32_t oldest = 0xFFFFFFFF;
+    for (int i = 0; i < MAX_VIEWERS; i++) {
+      if (s_vs[i].last_ok < oldest) { oldest = s_vs[i].last_ok; slot = i; }
+    }
+    Serial.printf("[流] 槽位已满，淘汰旧连接 #%d\n", slot);
+    s_vs[slot].c.stop();
+    s_vs[slot].active = false;
+    s_viewers--;
+  }
+
+  nc.setNoDelay(true);
   nc.printf(
       "HTTP/1.1 200 OK\r\n"
       "Content-Type: multipart/x-mixed-replace; boundary=" BOUNDARY "\r\n"
@@ -178,17 +274,11 @@ static void stream_accept() {
       "Access-Control-Allow-Origin: *\r\n"
       "Connection: close\r\n\r\n");
 
-  for (int i = 0; i < MAX_VIEWERS; i++) {
-    if (!s_vs[i].active) {
-      s_vs[i].c = nc;
-      s_vs[i].active = true;
-      s_viewers++;
-      Serial.printf("[流] 客户端接入（当前 %d 个）\n", s_viewers);
-      return;
-    }
-  }
-  Serial.println("[流] 连接数已满，拒绝");
-  nc.stop();
+  s_vs[slot].c = nc;
+  s_vs[slot].active = true;
+  s_vs[slot].last_ok = millis();
+  s_viewers++;
+  Serial.printf("[流] 客户端接入（槽位 %d，当前 %d 个）\n", slot, s_viewers);
 }
 
 static void stream_push() {
@@ -205,16 +295,26 @@ static void stream_push() {
 
   for (int i = 0; i < MAX_VIEWERS; i++) {
     if (!s_vs[i].active) continue;
-    if (!s_vs[i].c.connected()) {
+
+    bool bad = !s_vs[i].c.connected();
+    if (!bad) {
+      size_t w1 = s_vs[i].c.write((const uint8_t *)hdr, strlen(hdr));
+      size_t w2 = s_vs[i].c.write((const uint8_t *)lenbuf, n);
+      size_t w3 = s_vs[i].c.write(fb->buf, fb->len);
+      bad = (w1 != strlen(hdr)) || (w2 != (size_t)n) || (w3 != fb->len);
+    }
+
+    // 5 秒没写成功也判死（半开连接靠 connected() 判断不出来）
+    if (!bad && millis() - s_vs[i].last_ok > 5000) bad = true;
+
+    if (bad) {
       s_vs[i].c.stop();
       s_vs[i].active = false;
       s_viewers--;
-      Serial.printf("[流] 客户端断开（剩 %d 个）\n", s_viewers);
-      continue;
+      Serial.printf("[流] 清理连接 槽位 %d（剩 %d 个）\n", i, s_viewers);
+    } else {
+      s_vs[i].last_ok = millis();
     }
-    s_vs[i].c.write((const uint8_t *)hdr, strlen(hdr));
-    s_vs[i].c.write((const uint8_t *)lenbuf, n);
-    s_vs[i].c.write(fb->buf, fb->len);
   }
 
   cam_release(fb);
@@ -370,11 +470,11 @@ static esp_err_t h_status_json(httpd_req_t *req) {
   const bool ap = (WiFi.getMode() == WIFI_AP);
   snprintf(b, sizeof(b),
            "{\"mode\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"res\":\"%s\","
-           "\"fps\":%.1f,\"frames\":%lu,\"viewers\":%d,\"heap\":%lu,\"uptime\":%lu,\"sd\":%s}",
+           "\"fps\":%.1f,\"frames\":%lu,\"viewers\":%d,\"heap\":%lu,\"uptime\":%lu,\"sd\":%s,\"lcd\":%s}",
            ap ? "AP" : "STA", cur_ip().toString().c_str(), ap ? 0 : WiFi.RSSI(),
            s_res, (double)s_fps, (unsigned long)s_frame_count, s_viewers,
            (unsigned long)ESP.getFreeHeap(), (unsigned long)millis(),
-           s_sd_ok ? "true" : "false");
+           (s_sd_ok ? "true" : "false"), (s_gfx ? "true" : "false"));
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   httpd_resp_set_hdr(req, "Cache-Control", "no-store");
@@ -465,9 +565,11 @@ void setup() {
                 psramFound() ? "有" : "无", (unsigned long)(ESP.getFreeHeap() / 1024));
 
   s_cam_mtx = xSemaphoreCreateMutex();
+  lcd_init();
   init_sd();
   if (!init_camera()) Serial.println("[CAM] 摄像头不可用，仅提供状态页");
   start_wifi();
+  lcd_status();
 
   s_stream_srv.begin();
   s_stream_srv.setNoDelay(true);
@@ -495,5 +597,14 @@ void loop() {
     last_self = millis();
     if (s_server) self_test();
   }
+
+  // 屏幕每 3 秒刷新一次
+  static uint32_t last_lcd = 0;
+  if (millis() - last_lcd > 3000) {
+    last_lcd = millis();
+    lcd_status();
+  }
+
   delay(5);
 }
+
