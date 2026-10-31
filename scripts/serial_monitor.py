@@ -48,10 +48,27 @@ def main() -> int:
 
         t0 = time.time()
         total = 0
+        reconnects = 0
         with open(log_path, "ab") as fh:
             try:
                 while True:
-                    chunk = ser.read(4096)
+                    try:
+                        chunk = ser.read(4096)
+                    except (serial.SerialException, OSError):
+                        # USB-CDC 设备被复位后会重新枚举，句柄失效：重连继续
+                        reconnects += 1
+                        if reconnects > 8:
+                            print("\n[放弃] 串口反复断开")
+                            break
+                        print(f"\n[重连 #{reconnects}] 端口重新枚举中…")
+                        try:
+                            ser.close()
+                        except Exception:
+                            pass
+                        time.sleep(1.0)
+                        ser = serial.Serial(args.port, args.baud, timeout=0.2)
+                        continue
+
                     if chunk:
                         total += len(chunk)
                         fh.write(chunk)
@@ -62,6 +79,10 @@ def main() -> int:
                         break
             except KeyboardInterrupt:
                 print("\n[中断]")
+        try:
+            ser.close()
+        except Exception:
+            pass
     print(f"\n共收到 {total} 字节")
     return 0
 

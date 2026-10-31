@@ -2,12 +2,17 @@
 
 工作目录：`E:\ESP32开发`
 设备：**微雪 Waveshare ESP32-S3-LCD-2**（2 寸 IPS 240×320，ESP32-S3R8 + 16MB Flash，板载摄像头接口 / TF 卡槽，屏幕无触摸）
-当前状态：**串口 `COM16` 可用；整片 16 MB Flash 已备份；屏幕已点亮并运行出厂 demo；OV5640 已装待功能验证**（详见 [docs/设备信息.md](docs/设备信息.md)、[docs/固件备份.md](docs/固件备份.md)）。
+当前状态：**第一版"网页图传"固件已跑起来** —— 摄像头 `PID=0x5640`（OV5640）识别成功、热点 `ESP32-LCD2-CAM` 已开、HTTP 图传服务在线（详见 [firmware/webcam](firmware/webcam/README.md)）。
 
 ## 目录结构
 
 ```
 E:\ESP32开发
+├─ firmware\webcam\      ▶ 网页图传工程（PlatformIO）
+│  ├─ platformio.ini        esp32s3 + arduino + 8MB PSRAM + 16MB 分区
+│  ├─ partitions_16MB.csv   与出厂固件同布局
+│  ├─ README.md             编译/烧录/接口说明/排查表
+│  └─ src\                  main.cpp / camera_pins.h / wifi_config.h / www.h
 ├─ 设备图片\            设备照片（板子正面 / 屏幕 / 摄像头 / 装机后实拍）
 │  ├─ 板子正面照.jpg        装机前
 │  ├─ 板子屏幕与接口.jpg     屏幕模块（FPC 排线）
@@ -23,15 +28,39 @@ E:\ESP32开发
 │  └─ img\               丝印、摄像头标签、接线标注、官方引脚图、原理图矩阵截图
 ├─ scripts\
 │  ├─ chip_info.ps1     一键探测板子（端口 / 芯片 / Flash / 分区）
-│  ├─ serial_monitor.py 串口监视 + 复位抓启动日志
+│  ├─ serial_monitor.py 串口监视 + 复位抓启动日志（带自动重连）
+│  ├─ cam_test.ps1      图传自测：/status + /capture + /shoot
 │  ├─ fw_inspect.py     固件离线分析（分区表 / app 描述符 / 关键词串）
 │  ├─ webget.py         本地抓网页转文本（绕开本机 fake-ip 导致的 fetch 限制）
 │  └─ push_log.ps1      收工一键：提交并推送开发日志仓库
 ├─ 日志\                开发日志（**独立 git 仓库**，自己的远端，已 gitignore）
 ├─ dump\                Flash 备份（已 gitignore，不入库）
-├─ logs\                串口日志（已 gitignore）
-└─ .venv\               Python 虚拟环境（esptool + pyserial，已 gitignore）
+├─ logs\                串口日志、抓到的快照（已 gitignore）
+└─ .venv\               Python 虚拟环境（esptool + pyserial + platformio，已 gitignore）
 ```
+
+## 网页图传（第一版）
+
+```powershell
+cd E:\ESP32开发\firmware\webcam
+..\..\.venv\Scripts\python.exe -m platformio run -t upload     # 编译 + 烧录（COM16）
+..\..\.venv\Scripts\python.exe -m platformio device monitor -p COM16 -b 115200
+```
+
+上电后板子开热点 `ESP32-LCD2-CAM / 12345678`，手机连上打开 <http://192.168.4.1/> 即可看图。
+（想让板子连自家路由：填 `src/wifi_config.h` 里的 SSID/密码，15 秒连不上会自动退回热点。）
+
+| 接口 | 作用 |
+| --- | --- |
+| `/` | 网页界面 |
+| `/stream` | MJPEG 实时流 |
+| `/capture` | 下载当前帧 |
+| `/shoot` | 拍照存 TF 卡 `/photo/` |
+| `/status` | JSON 状态 |
+| `/restart` | 软重启 |
+
+连上热点后一条命令自测：`.\scripts\cam_test.ps1`
+
 
 ## 开发日志（独立仓库）
 
