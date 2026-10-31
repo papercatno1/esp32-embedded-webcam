@@ -281,6 +281,20 @@ static void stream_accept() {
   Serial.printf("[流] 客户端接入（槽位 %d，当前 %d 个）\n", slot, s_viewers);
 }
 
+// 完整写出一段数据：允许分段写入（WiFiClient 缓冲满时会返回部分长度，这不是错误）
+static bool send_all(WiFiClient &c, const uint8_t *buf, size_t len, uint32_t timeout_ms = 1200) {
+  size_t sent = 0;
+  uint32_t t0 = millis();
+  while (sent < len) {
+    size_t n = c.write(buf + sent, len - sent);
+    if (n > 0) { sent += n; continue; }
+    if (!c.connected()) return false;              // 对端真断了
+    if (millis() - t0 > timeout_ms) return false;  // 太慢，判定跟不上
+    delay(2);
+  }
+  return true;
+}
+
 static void stream_push() {
   if (s_viewers == 0) return;
   if (millis() - s_last_push_ms < 40) return;   // 限速 ~25fps，别把 AP 打满
@@ -296,18 +310,12 @@ static void stream_push() {
   for (int i = 0; i < MAX_VIEWERS; i++) {
     if (!s_vs[i].active) continue;
 
-    bool bad = !s_vs[i].c.connected();
-    if (!bad) {
-      size_t w1 = s_vs[i].c.write((const uint8_t *)hdr, strlen(hdr));
-      size_t w2 = s_vs[i].c.write((const uint8_t *)lenbuf, n);
-      size_t w3 = s_vs[i].c.write(fb->buf, fb->len);
-      bad = (w1 != strlen(hdr)) || (w2 != (size_t)n) || (w3 != fb->len);
-    }
+    bool ok = s_vs[i].c.connected() &&
+              send_all(s_vs[i].c, (const uint8_t *)hdr, strlen(hdr)) &&
+              send_all(s_vs[i].c, (const uint8_t *)lenbuf, n) &&
+              send_all(s_vs[i].c, fb->buf, fb->len);
 
-    // 5 秒没写成功也判死（半开连接靠 connected() 判断不出来）
-    if (!bad && millis() - s_vs[i].last_ok > 5000) bad = true;
-
-    if (bad) {
+    if (!ok) {
       s_vs[i].c.stop();
       s_vs[i].active = false;
       s_viewers--;
@@ -358,7 +366,11 @@ static esp_err_t h_index(httpd_req_t *req) {
     snprintf(b, sizeof(b),
              "</header><main><div class=\"viewer\">"
              "<img id=\"stream\" src=\"http://%s:81/stream\" alt=\"视频流\"></div>"
-             "<div class=\"meta\">", ip.toString().c_str());
+             "<p class=\"note\" style=\"margin:6px 0 0\">画面没出来？直接打开 "
+             "<a href=\"http://%s:81/stream\" style=\"color:#79c0ff\">http://%s:81/stream</a>"
+             " 试试；仍不行就强制刷新（Ctrl+F5 / 清缓存）。</p>"
+             "<div class=\"meta\">",
+             ip.toString().c_str(), ip.toString().c_str(), ip.toString().c_str());
     res = httpd_resp_send_chunk(req, b, strlen(b));
   }
   if (res == ESP_OK) {
