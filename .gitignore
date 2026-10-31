@@ -1,0 +1,36 @@
+# ---- Python ----
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# ---- ESP-IDF / PlatformIO ----
+.pio/
+.pioenvs/
+.piolibdeps/
+sdkconfig.old
+build/
+managed_components/
+dependencies.lock
+
+# ---- Arduino ----
+*.bin.bak
+*.elf
+*.map
+
+# ---- 系统 / 编辑器 ----
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/settings.json
+.idea/
+
+# ---- 临时产物（日志、抓到的串口输出、固件备份） ----
+tmp/
+logs/
+*.log
+dump/
+backup/
+firmware_backup/
