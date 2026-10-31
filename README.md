@@ -1,20 +1,23 @@
 # ESP32 开发项目
 
 工作目录：`E:\ESP32开发`
-设备：**微雪 Waveshare ESP32-S3-LCD-2**（2 寸 IPS 240×320，ESP32-S3R8 + 16MB Flash，板载摄像头接口 / TF 卡槽）
-当前状态：**板子已通过 USB-C 连上电脑，串口 `COM16` 可用，esptool 可正常识别并读写 Flash**（详见 [docs/设备信息.md](docs/设备信息.md)）。
+设备：**微雪 Waveshare ESP32-S3-LCD-2**（2 寸 IPS 240×320，ESP32-S3R8 + 16MB Flash，板载摄像头接口 / TF 卡槽，屏幕无触摸）
+当前状态：**串口 `COM16` 可用；整片 16 MB Flash 已备份；屏幕已点亮并运行出厂 demo；OV5640 已装待功能验证**（详见 [docs/设备信息.md](docs/设备信息.md)、[docs/固件备份.md](docs/固件备份.md)）。
 
 ## 目录结构
 
 ```
 E:\ESP32开发
-├─ 设备图片\            原始设备照片（板子正面 / 屏幕 / 摄像头）
-│  ├─ 板子正面照.jpg
-│  ├─ 板子屏幕与接口.jpg   屏幕模块（FPC 排线）
-│  └─ 摄像头照片.jpg      OV5640 摄像头（SKU 29456）
+├─ 设备图片\            设备照片（板子正面 / 屏幕 / 摄像头 / 装机后实拍）
+│  ├─ 板子正面照.jpg        装机前
+│  ├─ 板子屏幕与接口.jpg     屏幕模块（FPC 排线）
+│  ├─ 摄像头照片.jpg        OV5640 摄像头（SKU 29456）
+│  ├─ 摄像头连接图.jpg      装上摄像头后
+│  └─ 屏幕显示图.jpg        屏幕点亮后（出厂 demo）
 ├─ docs\
-│  ├─ 设备信息.md        硬件判读 + 芯片实测数据 + 现有固件信息
-│  └─ img\               丝印、摄像头标签等取证特写
+│  ├─ 设备信息.md        硬件判读 + 芯片实测数据 + 现有固件 + 实机验证进展
+│  ├─ 固件备份.md        16 MB 整片备份记录（大小/SHA256/恢复步骤）
+│  └─ img\               丝印、摄像头标签、接线标注等特写
 ├─ scripts\
 │  ├─ chip_info.ps1     一键探测板子（端口 / 芯片 / Flash / 分区）
 │  ├─ serial_monitor.py 串口监视 + 复位抓启动日志
@@ -81,10 +84,24 @@ cd E:\ESP32开发
 ## 板上现有固件
 
 出厂 `01_factory` 演示固件（Arduino-ESP32 3.1.1 / IDF v5.3.2 编译，编译时间 2025-01-06），
-含 LVGL 界面、摄像头、SD 卡、Wi-Fi 网页服务等任务。**动 Flash 之前先备份**（见上）。
+含 LVGL 界面、摄像头、SD 卡、Wi-Fi 网页服务等任务，界面左栏为 `System / QMI8658 / Camera / WiFi`。
+
+**整片 Flash 已于 2026-10-31 13:51 备份**：`dump\full_flash.bin`（16,777,216 B，SHA256 `31BA1ECF…12FD`），
+详见 [docs/固件备份.md](docs/固件备份.md)。刷机出问题可整片回滚。
+
+## 进度
+
+- [x] 硬件识别（Waveshare ESP32-S3-LCD-2）
+- [x] 串口连通（COM16，esptool 可读写）
+- [x] 出厂固件取证（分区表 / app 描述符 / 关键字符串）
+- [x] **整片 16 MB Flash 备份 + 校验**（13:51）
+- [x] **屏幕点亮**（40pin FPC，出厂 demo 正常显示 System 页）
+- [x] 摄像头安装（OV5640 已插入 24pin 座）
+- [ ] 摄像头功能验证（跑一次 `esp_camera_init`，看能否出图）
+- [ ] 开发方案定稿 → 建项目仓库
 
 ## 后续可做
 
-- 装 Arduino CLI 或 PlatformIO，做 Hello World / LVGL 点屏
-- 备份出厂固件后刷测试固件，保留 `dump\full_flash.bin` 作为回滚点
-- 接 OV5640 做拍照 + Wi-Fi 图传；屏幕 FPC 装到板载 40pin 座上验证点屏
+- 装 Arduino CLI 或 PlatformIO，写摄像头自检固件，验证 OV5640 是否真的通了
+- 用 BOOT 键切出厂 demo 的 `Camera` 页，零成本先看一眼有没有实时画面
+- 定方案后开工程：LVGL 界面 / 拍照图传 / SD 卡录像 / 传感器终端
