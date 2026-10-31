@@ -15,6 +15,7 @@
 #include <esp_camera.h>
 #include <esp_http_server.h>
 #include <Arduino_GFX_Library.h>
+#include <stdarg.h>
 
 #include "camera_pins.h"
 #include "wifi_config.h"
@@ -34,6 +35,8 @@ static uint32_t s_last_frame_ms = 0;
 static uint32_t s_last_push_ms = 0;
 
 #define BOUNDARY "frameboundary"
+
+static void diag(const char *fmt, ...);   // 前向声明（事件日志）
 #define MAX_VIEWERS 2
 
 struct Viewer {
@@ -260,7 +263,7 @@ static void stream_accept() {
     for (int i = 0; i < MAX_VIEWERS; i++) {
       if (s_vs[i].last_ok < oldest) { oldest = s_vs[i].last_ok; slot = i; }
     }
-    Serial.printf("[流] 槽位已满，淘汰旧连接 #%d\n", slot);
+    diag("淘汰 s%d", slot); Serial.printf("[流] 槽位已满，淘汰旧连接 #%d\n", slot);
     s_vs[slot].c.stop();
     s_vs[slot].active = false;
     s_viewers--;
@@ -273,12 +276,14 @@ static void stream_accept() {
       "Cache-Control: no-store\r\n"
       "Access-Control-Allow-Origin: *\r\n"
       "Connection: close\r\n\r\n");
+  nc.flush();
 
   s_vs[slot].c = nc;
   s_vs[slot].active = true;
   s_vs[slot].last_ok = millis();
   s_viewers++;
-  Serial.printf("[流] 客户端接入（槽位 %d，当前 %d 个）\n", slot, s_viewers);
+  diag("接入 s%d n%d", slot, s_viewers); Serial.printf("[流] 接入 槽位%d 现 %d 个 堆%luKB\n", slot, s_viewers,
+                (unsigned long)(ESP.getFreeHeap() / 1024));
 }
 
 // 完整写出一段数据：允许分段写入（WiFiClient 缓冲满时会返回部分长度，这不是错误）
@@ -310,7 +315,8 @@ static void stream_push() {
   for (int i = 0; i < MAX_VIEWERS; i++) {
     if (!s_vs[i].active) continue;
 
-    bool ok = s_vs[i].c.connected() &&
+    bool conn = s_vs[i].c.connected();
+    bool ok = conn &&
               send_all(s_vs[i].c, (const uint8_t *)hdr, strlen(hdr)) &&
               send_all(s_vs[i].c, (const uint8_t *)lenbuf, n) &&
               send_all(s_vs[i].c, fb->buf, fb->len);
@@ -319,7 +325,9 @@ static void stream_push() {
       s_vs[i].c.stop();
       s_vs[i].active = false;
       s_viewers--;
-      Serial.printf("[流] 清理连接 槽位 %d（剩 %d 个）\n", i, s_viewers);
+      diag("断开 s%d %s", i, conn ? "wfail" : "peer"); Serial.printf("[流] 断开 槽位%d 原因=%s 剩%d 堆%luKB\n", i,
+                    conn ? "写超时/写失败" : "对端已断", s_viewers,
+                    (unsigned long)(ESP.getFreeHeap() / 1024));
     } else {
       s_vs[i].last_ok = millis();
     }
@@ -335,6 +343,25 @@ static void stream_push() {
     s_fps = s_fps * 0.85f + inst * 0.15f;
   }
   s_last_frame_ms = now;
+}
+
+// ---------------- 事件日志（给 /diag 用） ----------------
+#define DIAG_N 14
+static char s_diag[DIAG_N][64];
+static int  s_diag_idx = 0;
+static int  s_diag_cnt = 0;
+
+static void diag(const char *fmt, ...) {
+  va_list ap;
+  va_start(ap, fmt);
+  char tmp[64];
+  int n = vsnprintf(tmp, sizeof(tmp), fmt, ap);
+  va_end(ap);
+  if (n < 0) return;
+  snprintf(s_diag[s_diag_idx], sizeof(s_diag[0]), "%6lus %s",
+           (unsigned long)(millis() / 1000), tmp);
+  s_diag_idx = (s_diag_idx + 1) % DIAG_N;
+  if (s_diag_cnt < DIAG_N) s_diag_cnt++;
 }
 
 // ---------------- 80 端口：控制 ----------------
@@ -361,16 +388,18 @@ static esp_err_t h_index(httpd_req_t *req) {
              ap ? "AP" : "STA", ip.toString().c_str(), rssiTxt);
     res = httpd_resp_send_chunk(req, b, strlen(b));
   }
-  // 视频流地址：81 端口，IP 由服务端注入（不依赖 JS）
+  // 视频流地址：8080 端口，IP 由服务端注入（不依赖 JS）
   if (res == ESP_OK) {
     snprintf(b, sizeof(b),
              "</header><main><div class=\"viewer\">"
-             "<img id=\"stream\" src=\"http://%s:8080/stream\" alt=\"视频流\"></div>"
+             "<img id=\"stream\" src=\"http://%s:8080/stream\" "
+             "data-src=\"http://%s:8080/stream\" alt=\"视频流\"></div>"
              "<p class=\"note\" style=\"margin:6px 0 0\">画面没出来？直接打开 "
              "<a href=\"http://%s:8080/stream\" style=\"color:#79c0ff\">http://%s:8080/stream</a>"
-             " 试试；仍不行就强制刷新（Ctrl+F5 / 清缓存）。</p>"
+             " 试试；拉不动就走低配模式 <a href=\"/simple\" style=\"color:#79c0ff\">/simple</a>。</p>"
              "<div class=\"meta\">",
-             ip.toString().c_str(), ip.toString().c_str(), ip.toString().c_str());
+             ip.toString().c_str(), ip.toString().c_str(),
+             ip.toString().c_str(), ip.toString().c_str());
     res = httpd_resp_send_chunk(req, b, strlen(b));
   }
   if (res == ESP_OK) {
@@ -496,6 +525,34 @@ static esp_err_t h_status_html(httpd_req_t *req) {
   return httpd_resp_send(req, b, HTTPD_RESP_USE_STRLEN);
 }
 
+// 事件日志页：/diag —— 流接入/断开/淘汰都会记在这里，浏览器里直接看
+static esp_err_t h_diag(httpd_req_t *req) {
+  log_req(req);
+  char b[1500];
+  int off = snprintf(b, sizeof(b),
+           "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+           "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+           "<meta http-equiv=\"refresh\" content=\"3\">"
+           "<title>事件日志</title><style>body{background:#111418;color:#e6e9ef;"
+           "font:14px/1.7 ui-monospace,Consolas,monospace;padding:18px}"
+           "h3{font:600 15px system-ui}a{color:#79c0ff}</style></head><body>"
+           "<h3>最近 %d 条流事件（3 秒自动刷新）</h3><pre>", s_diag_cnt);
+  for (int k = 0; k < s_diag_cnt; k++) {
+    int idx = (s_diag_idx - s_diag_cnt + k + DIAG_N * 2) % DIAG_N;
+    off += snprintf(b + off, sizeof(b) - off, "%s\n", s_diag[idx]);
+    if (off > (int)sizeof(b) - 80) break;
+  }
+  off += snprintf(b + off, sizeof(b) - off,
+           "</pre><p>观看端 %d · 帧 %lu · 堆 %lu KB · 运行 %lu s</p>"
+           "<p><a href=\"/\">返回图传</a> · <a href=\"/status\">状态</a></p>"
+           "</body></html>",
+           s_viewers, (unsigned long)s_frame_count,
+           (unsigned long)(ESP.getFreeHeap() / 1024), (unsigned long)(millis() / 1000));
+  httpd_resp_set_type(req, "text/html; charset=utf-8");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  return httpd_resp_send(req, b, HTTPD_RESP_USE_STRLEN);
+}
+
 static esp_err_t h_status_json(httpd_req_t *req) {
   log_req(req);
   char b[340];
@@ -555,6 +612,7 @@ static void start_http() {
       {"/simple",      HTTP_GET, h_simple,      nullptr},
       {"/status",      HTTP_GET, h_status_html, nullptr},
       {"/status.json", HTTP_GET, h_status_json, nullptr},
+      {"/diag",        HTTP_GET, h_diag,        nullptr},
       {"/favicon.ico", HTTP_GET, h_favicon,     nullptr},
       {"/restart",     HTTP_GET, h_restart,     nullptr},
   };
@@ -640,6 +698,10 @@ void loop() {
 
   delay(5);
 }
+
+
+
+
 
 
 

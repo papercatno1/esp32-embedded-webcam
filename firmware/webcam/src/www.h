@@ -58,13 +58,29 @@ static const char PAGE_TAIL[] PROGMEM = R"HTML(
 </main>
 <footer>画质/分辨率调整接口开发中</footer>
 <script>
-/* 有 JS 就顺便每秒刷新一次数值；没有也能正常用上面所有按钮 */
+/* 数值每秒刷新；视频流断了自动重连；两样都是增强，禁用了页面照样能用 */
 (function(){
+  /* ---- 视频流看门狗：出错或长时间无画面就重连 ---- */
+  var img = document.getElementById('stream');
+  var lastOk = Date.now();
+  if (img) {
+    var base = img.getAttribute('data-src') || img.src;
+    img.addEventListener('load', function(){ lastOk = Date.now(); });
+    img.addEventListener('error', function(){ setTimeout(reconnect, 1500); });
+    function reconnect(){
+      img.src = base + (base.indexOf('?') < 0 ? '?' : '&') + 't=' + Date.now();
+    }
+    setInterval(function(){
+      if (Date.now() - lastOk > 8000) { lastOk = Date.now(); reconnect(); }
+    }, 4000);
+  }
+
+  /* ---- 状态数值 ---- */
   if(!window.fetch) return;
   var ids=['m_mode','m_rssi','m_res','m_fps','m_frames','m_heap','m_uptime','m_sd'];
   function set(id,val){var e=document.getElementById(id); if(e) e.textContent=val;}
   function tick(){
-    fetch('/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){
+    fetch('/status.json',{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){
       set('m_mode', s.mode + (s.ip ? ' · ' + s.ip : ''));
       set('m_rssi', s.rssi ? s.rssi + ' dBm' : '—');
       set('m_res', s.res);
@@ -75,7 +91,7 @@ static const char PAGE_TAIL[] PROGMEM = R"HTML(
       set('m_sd', s.sd ? '已挂载' : '未插卡');
     }).catch(function(){});
   }
-  setInterval(tick, 1000); tick();
+  setInterval(tick, 3000); tick();
 })();
 </script>
 </body>
