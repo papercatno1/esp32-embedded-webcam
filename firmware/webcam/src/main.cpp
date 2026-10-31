@@ -22,7 +22,7 @@
 
 // ---------------- 状态 ----------------
 static httpd_handle_t   s_server = nullptr;
-static WiFiServer       s_stream_srv(81);
+static WiFiServer       s_stream_srv(8080);
 static SemaphoreHandle_t s_cam_mtx = nullptr;
 
 static volatile uint32_t s_frame_count = 0;   // 累计送出帧数
@@ -365,9 +365,9 @@ static esp_err_t h_index(httpd_req_t *req) {
   if (res == ESP_OK) {
     snprintf(b, sizeof(b),
              "</header><main><div class=\"viewer\">"
-             "<img id=\"stream\" src=\"http://%s:81/stream\" alt=\"视频流\"></div>"
+             "<img id=\"stream\" src=\"http://%s:8080/stream\" alt=\"视频流\"></div>"
              "<p class=\"note\" style=\"margin:6px 0 0\">画面没出来？直接打开 "
-             "<a href=\"http://%s:81/stream\" style=\"color:#79c0ff\">http://%s:81/stream</a>"
+             "<a href=\"http://%s:8080/stream\" style=\"color:#79c0ff\">http://%s:8080/stream</a>"
              " 试试；仍不行就强制刷新（Ctrl+F5 / 清缓存）。</p>"
              "<div class=\"meta\">",
              ip.toString().c_str(), ip.toString().c_str(), ip.toString().c_str());
@@ -397,9 +397,29 @@ static esp_err_t h_index(httpd_req_t *req) {
 static esp_err_t h_stream_hint(httpd_req_t *req) {
   log_req(req);
   char b[160];
-  snprintf(b, sizeof(b), "视频流在 http://%s:81/stream",
+  snprintf(b, sizeof(b), "视频流在 http://%s:8080/stream",
            cur_ip().toString().c_str());
   httpd_resp_set_type(req, "text/plain; charset=utf-8");
+  return httpd_resp_send(req, b, HTTPD_RESP_USE_STRLEN);
+}
+
+// 低配预览：不依赖 MJPEG（个别浏览器/扩展会拦 :8080 的 multipart 流）
+static esp_err_t h_simple(httpd_req_t *req) {
+  log_req(req);
+  char b[700];
+  snprintf(b, sizeof(b),
+           "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
+           "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+           "<meta http-equiv=\"refresh\" content=\"1\">"
+           "<title>低配预览</title></head>"
+           "<body style=\"margin:0;background:#111418\">"
+           "<img src=\"/capture\" style=\"display:block;width:100%%\">"
+           "<p style=\"color:#8b949e;font:13px system-ui;text-align:center;margin:10px\">"
+           "低配模式：每秒刷新一帧（不走 MJPEG，兼容性最好）· "
+           "<a href=\"/\" style=\"color:#79c0ff\">返回图传</a></p>"
+           "</body></html>");
+  httpd_resp_set_type(req, "text/html; charset=utf-8");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
   return httpd_resp_send(req, b, HTTPD_RESP_USE_STRLEN);
 }
 
@@ -532,6 +552,7 @@ static void start_http() {
       {"/stream",      HTTP_GET, h_stream_hint, nullptr},
       {"/capture",     HTTP_GET, h_capture,     nullptr},
       {"/shoot",       HTTP_GET, h_shoot,       nullptr},
+      {"/simple",      HTTP_GET, h_simple,      nullptr},
       {"/status",      HTTP_GET, h_status_html, nullptr},
       {"/status.json", HTTP_GET, h_status_json, nullptr},
       {"/favicon.ico", HTTP_GET, h_favicon,     nullptr},
@@ -585,7 +606,7 @@ void setup() {
 
   s_stream_srv.begin();
   s_stream_srv.setNoDelay(true);
-  Serial.println("[流] 端口 81 就绪");
+  Serial.println("[流] 端口 8080 就绪");
 
   start_http();
   Serial.printf("\n浏览器打开: http://%s/\n\n", cur_ip().toString().c_str());
@@ -619,4 +640,6 @@ void loop() {
 
   delay(5);
 }
+
+
 

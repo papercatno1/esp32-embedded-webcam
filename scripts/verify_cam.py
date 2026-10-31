@@ -13,6 +13,10 @@ import socket
 import sys
 import time
 import urllib.request
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+except Exception:
+    pass
 
 
 def get(url: str, timeout: float = 10) -> tuple[int, bytes]:
@@ -57,7 +61,7 @@ def main() -> int:
 
     # 4) 关键：流开着的时候，控制面还能不能响应
     print("[4] 并发测试：开一个 MJPEG 连接，同时请求控制接口")
-    s = socket.create_connection((args.host, 81), timeout=8)
+    s = socket.create_connection((args.host, 8080), timeout=8)
     s.sendall(b"GET /stream HTTP/1.1\r\nHost: x\r\n\r\n")
     s.settimeout(6)
     buf = b""
@@ -95,4 +99,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
 

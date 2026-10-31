@@ -9,10 +9,11 @@
 | 路径 | 作用 |
 | --- | --- |
 | `/` | 网页界面（深色、手机自适应） |
-| `/stream` | MJPEG 实时流（`multipart/x-mixed-replace`） |
+| `/stream` | MJPEG 实时流（**在 8080 端口**，`multipart/x-mixed-replace`） |
+| `/simple` | 低配预览：每秒一帧，不走 MJPEG，个别浏览器/扩展拦截时用它 |
 | `/capture` | 下载当前一帧 JPG |
 | `/shoot` | 拍照存到 TF 卡 `/photo/<毫秒>.jpg` |
-| `/status` | 状态 JSON（模式/IP/RSSI/分辨率/帧率/堆/运行时长/是否有卡） |
+| `/status` | 状态页（HTML；`/status.json` 是 JSON 版） |
 | `/restart` | 重启板子 |
 
 - 摄像头：OV5640，VGA 640×480，JPEG，质量 12，双缓冲放 PSRAM
@@ -97,12 +98,12 @@ cd E:\ESP32开发
 
 ```
 80 端口  esp_http_server  →  /  /status  /status.json  /capture  /shoot  /restart
-81 端口  WiFiServer（自己写的裸 TCP）→  /stream  MJPEG
+8080 端口 WiFiServer（自己写的裸 TCP）→  /stream  MJPEG
 ```
 
 **为什么分两个端口**：ESP-IDF 4.4 的 `httpd` 是**单任务模型**，一个 handler 阻塞（MJPEG 无限推流）
 整个 HTTP 服务就停摆 —— 表现就是"看着实时画面时，点任何按钮页面都刷不完"。
-把流搬到 81 端口由 `loop()` 自己推送后，80 端口的控制请求永远有空处理。
+把流搬到独立端口由 `loop()` 自己推送后，80 端口的控制请求永远有空处理。
 
 其他设计要点：
 
@@ -145,3 +146,5 @@ cd E:\ESP32开发
 - 分辨率切换接口（VGA / SVGA / UXGA）
 - 录像（连拍 JPEG 打包）
 - 手机端自动刷新缩略图墙
+
+
