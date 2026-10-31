@@ -16,6 +16,7 @@
 #include <esp_http_server.h>
 #include <Arduino_GFX_Library.h>
 #include <stdarg.h>
+#include <lwip/sockets.h>
 
 #include "camera_pins.h"
 #include "wifi_config.h"
@@ -37,7 +38,8 @@ static uint32_t s_last_push_ms = 0;
 #define BOUNDARY "frameboundary"
 
 static void diag(const char *fmt, ...);   // 前向声明（事件日志）
-#define MAX_VIEWERS 2
+static bool send_all(WiFiClient &c, const uint8_t *buf, size_t len, uint32_t timeout_ms);
+#define MAX_VIEWERS 1   // 单观看端：新连接一律顶掉旧的，避免刷新残留占着 socket
 
 struct Viewer {
   WiFiClient c;
@@ -243,31 +245,97 @@ static void lcd_status() {
   s_gfx->printf("Up   %lu s", (unsigned long)(millis() / 1000));
 }
 
-// ---------------- 81 端口：MJPEG ----------------
+// 关连接：先用 SO_LINGER(1,0) 让 TCP 立即发 RST，把 PCB 还给 lwIP
+// （默认的优雅关闭会留下 TIME_WAIT/FIN_WAIT，几次刷新就能把 10 个 socket 吃光）
+static void drop_client(WiFiClient &c) {
+  if (!c) return;
+  int fd = c.fd();
+  if (fd >= 0) {
+    struct linger lg = {1, 0};
+    setsockopt(fd, SOL_SOCKET, SO_LINGER, &lg, sizeof(lg));
+  }
+  c.stop();
+}
+
+// 一次性响应用：先把数据发完再正常关闭（不能 RST，否则缓冲里的字节全丢）
+static void close_graceful(WiFiClient &c) {
+  c.flush();
+  delay(5);
+  c.stop();
+}
+
+// ---------------- 8080 端口：流 + 取图（自带极简 HTTP，不经过 httpd） ----------------
+// 为什么要自己实现：httpd 每个请求占一个 socket，而 lwIP 总共只有 10 个。
+// 取图/状态这类高频短请求放在这里，一请求一连接、发完立刻 RST 释放，绝不堆积。
+static void send_headers(WiFiClient &c, const char *ctype, int len) {
+  c.printf("HTTP/1.1 200 OK\r\nContent-Type: %s\r\nContent-Length: %d\r\n"
+           "Cache-Control: no-store\r\nAccess-Control-Allow-Origin: *\r\n"
+           "Connection: close\r\n\r\n", ctype, len);
+}
+
 static void stream_accept() {
   WiFiClient nc = s_stream_srv.available();
   if (!nc) return;
 
-  // 读掉请求头（最多等 300ms），不必解析
+  // 读请求行（最多等 200ms），拿到方法+路径
+  String line;
   uint32_t t0 = millis();
-  while (nc.available() == 0 && millis() - t0 < 300) delay(2);
-  while (nc.available()) nc.read();
-
-  // 找空位；满了就淘汰"最久没写成功"的那个（刷新页面会留下僵尸连接）
-  int slot = -1;
-  for (int i = 0; i < MAX_VIEWERS; i++) {
-    if (!s_vs[i].active) { slot = i; break; }
-  }
-  if (slot < 0) {
-    uint32_t oldest = 0xFFFFFFFF;
-    for (int i = 0; i < MAX_VIEWERS; i++) {
-      if (s_vs[i].last_ok < oldest) { oldest = s_vs[i].last_ok; slot = i; }
+  while (millis() - t0 < 200) {
+    while (nc.available()) {
+      char ch = (char)nc.read();
+      if (ch == '\n') { if (line.endsWith("\r")) line.remove(line.length() - 1); goto got_line; }
+      if (line.length() < 120) line += ch;
     }
-    diag("淘汰 s%d", slot); Serial.printf("[流] 槽位已满，淘汰旧连接 #%d\n", slot);
-    s_vs[slot].c.stop();
-    s_vs[slot].active = false;
-    s_viewers--;
+    if (line.length() && line.indexOf('\n') >= 0) break;
+    delay(1);
   }
+got_line:
+  while (nc.available()) nc.read();   // 丢掉剩余头
+
+  // ---- 取图类短请求：发完就关 ----
+  if (line.startsWith("GET /capture")) {
+    camera_fb_t *fb = cam_grab();
+    if (fb) {
+      send_headers(nc, "image/jpeg", fb->len);
+      send_all(nc, fb->buf, fb->len, 800);
+      cam_release(fb);
+    } else {
+      nc.print("HTTP/1.1 503 Busy\r\nContent-Length: 0\r\n\r\n");
+    }
+    close_graceful(nc);
+    return;
+  }
+  if (line.startsWith("GET /status.json")) {
+    char b[320];
+    const bool ap = (WiFi.getMode() == WIFI_AP);
+    snprintf(b, sizeof(b),
+             "{\"mode\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"res\":\"%s\",\"fps\":%.1f,"
+             "\"frames\":%lu,\"viewers\":%d,\"heap\":%lu,\"uptime\":%lu,\"sd\":%s,\"lcd\":%s}",
+             ap ? "AP" : "STA", cur_ip().toString().c_str(), ap ? 0 : WiFi.RSSI(),
+             s_res, (double)s_fps, (unsigned long)s_frame_count, s_viewers,
+             (unsigned long)ESP.getFreeHeap(), (unsigned long)millis(),
+             s_sd_ok ? "true" : "false", s_gfx ? "true" : "false");
+    send_headers(nc, "application/json", strlen(b));
+    send_all(nc, (const uint8_t *)b, strlen(b), 500);
+    close_graceful(nc);
+    return;
+  }
+  if (!line.startsWith("GET /stream")) {
+    nc.print("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+    close_graceful(nc);
+    return;
+  }
+
+  // ---- MJPEG 流：单观看端，新连接顶掉旧的 ----
+  for (int i = 0; i < MAX_VIEWERS; i++) {
+    if (s_vs[i].active) {
+      drop_client(s_vs[i].c);
+      s_vs[i].active = false;
+      s_viewers--;
+      diag("顶掉 s%d", i);
+    }
+  }
+  int slot = 0;
 
   nc.setNoDelay(true);
   nc.printf(
@@ -287,7 +355,7 @@ static void stream_accept() {
 }
 
 // 完整写出一段数据：允许分段写入（WiFiClient 缓冲满时会返回部分长度，这不是错误）
-static bool send_all(WiFiClient &c, const uint8_t *buf, size_t len, uint32_t timeout_ms = 1200) {
+static bool send_all(WiFiClient &c, const uint8_t *buf, size_t len, uint32_t timeout_ms) {
   size_t sent = 0;
   uint32_t t0 = millis();
   while (sent < len) {
@@ -317,12 +385,12 @@ static void stream_push() {
 
     bool conn = s_vs[i].c.connected();
     bool ok = conn &&
-              send_all(s_vs[i].c, (const uint8_t *)hdr, strlen(hdr)) &&
-              send_all(s_vs[i].c, (const uint8_t *)lenbuf, n) &&
-              send_all(s_vs[i].c, fb->buf, fb->len);
+              send_all(s_vs[i].c, (const uint8_t *)hdr, strlen(hdr), 400) &&
+              send_all(s_vs[i].c, (const uint8_t *)lenbuf, n, 400) &&
+              send_all(s_vs[i].c, fb->buf, fb->len, 400);
 
     if (!ok) {
-      s_vs[i].c.stop();
+      drop_client(s_vs[i].c);
       s_vs[i].active = false;
       s_viewers--;
       diag("断开 s%d %s", i, conn ? "wfail" : "peer"); Serial.printf("[流] 断开 槽位%d 原因=%s 剩%d 堆%luKB\n", i,
@@ -439,14 +507,14 @@ static esp_err_t h_simple(httpd_req_t *req) {
   snprintf(b, sizeof(b),
            "<!DOCTYPE html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">"
            "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-           "<meta http-equiv=\"refresh\" content=\"1\">"
+           "<meta http-equiv=\"refresh\" content=\"3\">"
            "<title>低配预览</title></head>"
            "<body style=\"margin:0;background:#111418\">"
-           "<img src=\"/capture\" style=\"display:block;width:100%%\">"
+           "<img src=\"http://%s:8080/capture\" style=\"display:block;width:100%%\">"
            "<p style=\"color:#8b949e;font:13px system-ui;text-align:center;margin:10px\">"
            "低配模式：每秒刷新一帧（不走 MJPEG，兼容性最好）· "
            "<a href=\"/\" style=\"color:#79c0ff\">返回图传</a></p>"
-           "</body></html>");
+           "</body></html>", cur_ip().toString().c_str());
   httpd_resp_set_type(req, "text/html; charset=utf-8");
   httpd_resp_set_hdr(req, "Cache-Control", "no-store");
   return httpd_resp_send(req, b, HTTPD_RESP_USE_STRLEN);
@@ -593,12 +661,12 @@ static void start_http() {
   cfg.server_port      = 80;
   cfg.ctrl_port        = 32768;
   cfg.max_uri_handlers = 10;
-  cfg.max_open_sockets = 4;      // lwIP 一共 10 个 socket，流服务还要占
+  cfg.max_open_sockets = 4;      // 太小会让请求排队（排队时新连接会被 RST），太大又会挤掉流
   cfg.backlog_conn     = 3;
   cfg.lru_purge_enable = true;
   cfg.stack_size       = 8192;
-  cfg.recv_wait_timeout = 5;
-  cfg.send_wait_timeout = 5;
+  cfg.recv_wait_timeout = 2;
+  cfg.send_wait_timeout = 2;
 
   if (httpd_start(&s_server, &cfg) != ESP_OK) {
     Serial.println("[HTTP] 服务启动失败");
@@ -665,6 +733,7 @@ void setup() {
   s_stream_srv.begin();
   s_stream_srv.setNoDelay(true);
   Serial.println("[流] 端口 8080 就绪");
+  // 推流仍在 loop() 里做：单线程改 s_vs[]，避免和 accept 抢状态
 
   start_http();
   Serial.printf("\n浏览器打开: http://%s/\n\n", cur_ip().toString().c_str());
@@ -676,7 +745,7 @@ void loop() {
   stream_accept();
   stream_push();
 
-  static uint32_t last_hb = 0, last_self = 0;
+  static uint32_t last_hb = 0, last_self = 0, last_lcd = 0;
   if (millis() - last_hb > 5000) {
     last_hb = millis();
     int sta = (WiFi.getMode() == WIFI_AP) ? WiFi.softAPgetStationNum() : 0;
@@ -684,20 +753,22 @@ void loop() {
                   millis() / 1000, (unsigned long)s_frame_count, (double)s_fps,
                   s_viewers, sta, (unsigned long)(ESP.getFreeHeap() / 1024));
   }
-  if (millis() - last_self > 60000) {
+  if (millis() - last_self > 120000) {
     last_self = millis();
     if (s_server) self_test();
   }
-
-  // 屏幕每 3 秒刷新一次
-  static uint32_t last_lcd = 0;
   if (millis() - last_lcd > 3000) {
     last_lcd = millis();
     lcd_status();
   }
 
-  delay(5);
+  delay(2);
 }
+
+
+
+
+
 
 
 

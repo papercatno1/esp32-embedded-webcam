@@ -50,7 +50,7 @@ static const char PAGE_TAIL[] PROGMEM = R"HTML(
   </div>
   <div class="row">
     <a class="btn primary" href="/shoot">拍一张存卡</a>
-    <a class="btn" href="/capture" download="snap.jpg">下载当前帧</a>
+    <a class="btn" id="dl" href="/capture" download="snap.jpg">下载当前帧</a>
     <a class="btn" href="/restart" onclick="return confirm('确定重启板子？')">重启板子</a>
     <a class="btn" href="/">刷新状态</a>
   </div>
@@ -60,6 +60,10 @@ static const char PAGE_TAIL[] PROGMEM = R"HTML(
 <script>
 /* 数值每秒刷新；视频流断了自动重连；两样都是增强，禁用了页面照样能用 */
 (function(){
+  /* 取图走 8080（那里是自带轻量 HTTP，不占 httpd 的 socket） */
+  var dl = document.getElementById('dl');
+  if (dl) dl.href = 'http://' + location.hostname + ':8080/capture';
+
   /* ---- 视频流看门狗：出错或长时间无画面就重连 ---- */
   var img = document.getElementById('stream');
   var lastOk = Date.now();
@@ -109,3 +113,5 @@ padding:40px 20px;text-align:center}a{color:#79c0ff}</style></head><body><p>
 static const char RESULT_TAIL[] PROGMEM = R"HTML(
 </p><p><a href="/">← 返回</a></p></body></html>
 )HTML";
+
+
