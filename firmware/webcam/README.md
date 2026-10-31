@@ -52,11 +52,29 @@ cd E:\ESP32开发
 > ⚠️ 别用 `pio run -t upload`：这块板的 USB-CDC 上 PlatformIO 的上传器会在切换波特率那步
 > 掉线（`No serial data received`），同一根线用 esptool 直写却稳定 2.5 Mbit/s。
 
+## 架构（v5）：视频流与控制面分离
+
+```
+80 端口  esp_http_server  →  /  /status  /status.json  /capture  /shoot  /restart
+81 端口  WiFiServer（自己写的裸 TCP）→  /stream  MJPEG
+```
+
+**为什么分两个端口**：ESP-IDF 4.4 的 `httpd` 是**单任务模型**，一个 handler 阻塞（MJPEG 无限推流）
+整个 HTTP 服务就停摆 —— 表现就是"看着实时画面时，点任何按钮页面都刷不完"。
+把流搬到 81 端口由 `loop()` 自己推送后，80 端口的控制请求永远有空处理。
+
+其他设计要点：
+
+- 摄像头 `esp_camera_fb_get()` 用互斥锁保护，取帧带超时，不会两个请求互相卡死
+- `/shoot` 先判卡：没插 TF 卡直接返回结果页，不去碰摄像头
+- 视频流限速 ~25 fps，两个观看端共用一次抓帧
+- 每个请求打印到串口：`[HTTP] GET /shoot`，出问题能直接看请求有没有到
+
 ## 页面为什么不用 JS
 
 第一版页面靠 JS 拉 `/status` 并绑定按钮，在个别手机浏览器上脚本没跑，导致数值全是"—"、按钮没反应。
-第二版改成：**关键数值由服务端渲染进 HTML，按钮就是普通链接**（`/shoot`、`/capture`、`/restart`），
-JS 只作为"每秒自动刷新数值"的增强，禁用了也不影响任何功能。
+现在：**关键数值由服务端渲染进 HTML，按钮是普通链接**，JS 只做"每秒刷一次数字"的增强。
+
 
 固件启动时会自己做一次 HTTP 自检（板子访问自己的 80 端口），串口可见：
 

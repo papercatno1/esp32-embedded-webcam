@@ -43,13 +43,7 @@ static const char PAGE_HEAD[] PROGMEM = R"HTML(
   <h1>ESP32-S3-LCD-2 · 网页图传</h1>
 )HTML";
 
-// ---- 2) 中间：图片 + 状态行（数值由服务端填充） ----
-static const char PAGE_MID[] PROGMEM = R"HTML(
-</header>
-<main>
-  <div class="viewer"><img id="stream" src="/stream" alt="视频流"></div>
-  <div class="meta">
-)HTML";
+// ---- 2) 尾部：按钮 + 说明 + 可选 JS（视频流由服务端注入，图标在 81 端口） ----
 
 // ---- 3) 尾部：按钮 + 说明 + 可选 JS ----
 static const char PAGE_TAIL[] PROGMEM = R"HTML(
