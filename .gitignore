@@ -34,3 +34,6 @@ logs/
 dump/
 backup/
 firmware_backup/
+
+# ---- 独立的日志仓库（自带 .git，独立提交/推送） ----
+/日志/

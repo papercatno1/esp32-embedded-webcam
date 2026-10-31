@@ -18,11 +18,30 @@ E:\ESP32开发
 ├─ scripts\
 │  ├─ chip_info.ps1     一键探测板子（端口 / 芯片 / Flash / 分区）
 │  ├─ serial_monitor.py 串口监视 + 复位抓启动日志
-│  └─ fw_inspect.py     固件离线分析（分区表 / app 描述符 / 关键词串）
+│  ├─ fw_inspect.py     固件离线分析（分区表 / app 描述符 / 关键词串）
+│  └─ push_log.ps1      收工一键：提交并推送开发日志仓库
+├─ 日志\                开发日志（**独立 git 仓库**，自己的远端，已 gitignore）
 ├─ dump\                Flash 备份（已 gitignore，不入库）
 ├─ logs\                串口日志（已 gitignore）
 └─ .venv\               Python 虚拟环境（esptool + pyserial，已 gitignore）
 ```
+
+## 开发日志（独立仓库）
+
+日志与代码**分开管理**：日志记过程（文字/照片/命令/决策），本仓库放工程代码。
+
+- 日志仓库存放位置：`E:\ESP32开发\日志`（自带 `.git`，不被本仓库跟踪）
+- 远端：`git@github.com:papercatno1/esp32-embedded-devlog.git`
+- 规则：每次对话追加一个"回合"小节到当天 `日志\YYYY-MM-DD\日志.md`，只增不改；图片放 `图片\NN-说明.jpg`
+- 收工推送：
+
+```powershell
+.\scripts\push_log.ps1                                          # 自动用当天日期做提交信息
+.\scripts\push_log.ps1 -Message "日志: 2026-10-31 点屏记录"      # 自定义提交信息
+```
+
+首次使用需在 GitHub 上手动建空仓库 `esp32-embedded-devlog`（脚本会给出链接）。
+GitHub 不接受中文仓库名，故仓库名用 ASCII；项目名仍为「ESP32 嵌入式开发」。
 
 ## 环境
 
