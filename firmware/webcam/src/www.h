@@ -1,7 +1,8 @@
-// 网页界面（放在 Flash 里，不占 RAM）
+// 网页界面（分块发送，关键内容由服务端渲染 → 浏览器禁用 JS 也能用）
 #pragma once
 
-static const char INDEX_HTML[] PROGMEM = R"HTML(
+// ---- 1) 文档头 + 样式 + 顶栏（不含具体数值） ----
+static const char PAGE_HEAD[] PROGMEM = R"HTML(
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -19,84 +20,82 @@ static const char INDEX_HTML[] PROGMEM = R"HTML(
   .pill{padding:3px 10px;border-radius:999px;background:#1f6feb22;color:#79c0ff;
         border:1px solid #1f6feb55;font-size:12px}
   .pill.warn{background:#bb800922;color:#e3b341;border-color:#bb800955}
+  .pill.ok{background:#23863622;color:#7ee787;border-color:#23863655}
   main{padding:18px;display:flex;flex-direction:column;gap:14px;align-items:center;width:100%;max-width:900px}
   .viewer{position:relative;width:100%;background:#0d1117;border:1px solid #232a33;border-radius:12px;overflow:hidden}
   img{display:block;width:100%;height:auto;min-height:180px}
-  .meta{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;color:#9aa4b2}
+  .meta{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:#9aa4b2;
+        justify-content:center;padding:2px 0}
+  .meta span{white-space:nowrap}
   .meta b{color:#e6e9ef;font-weight:600}
-  .row{display:flex;gap:10px;flex-wrap:wrap}
-  button,a.btn{cursor:pointer;border:1px solid #2a323d;background:#1a2029;color:#e6e9ef;
-         padding:8px 14px;border-radius:9px;font-size:13px;text-decoration:none}
-  button:hover,a.btn:hover{background:#222a35}
-  button.primary{background:#1f6feb;border-color:#1f6feb}
-  button.primary:hover{background:#2d7dff}
-  footer{padding:16px;color:#5c6673;font-size:12px}
-  .err{color:#f85149;font-size:12px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+  .btn{cursor:pointer;border:1px solid #2a323d;background:#1a2029;color:#e6e9ef;
+       padding:9px 16px;border-radius:9px;font-size:13px;text-decoration:none;display:inline-block}
+  .btn:hover{background:#222a35}
+  .btn.primary{background:#1f6feb;border-color:#1f6feb;color:#fff}
+  .btn.primary:hover{background:#2d7dff}
+  footer{padding:16px;color:#5c6673;font-size:12px;text-align:center}
+  .note{color:#8b949e;font-size:12px}
 </style>
 </head>
 <body>
 <header>
   <h1>ESP32-S3-LCD-2 · 网页图传</h1>
-  <span class="pill" id="mode">连接中…</span>
-  <span class="pill warn" id="rssi">—</span>
+)HTML";
+
+// ---- 2) 中间：图片 + 状态行（数值由服务端填充） ----
+static const char PAGE_MID[] PROGMEM = R"HTML(
 </header>
-
 <main>
-  <div class="viewer">
-    <img id="stream" src="/stream" alt="视频流">
-  </div>
-
+  <div class="viewer"><img id="stream" src="/stream" alt="视频流"></div>
   <div class="meta">
-    <span>分辨率 <b id="res">—</b></span>
-    <span>帧率 <b id="fps">—</b></span>
-    <span>已传 <b id="frames">—</b> 帧</span>
-    <span>堆 <b id="heap">—</b></span>
-    <span>运行 <b id="uptime">—</b></span>
-    <span class="err" id="err"></span>
-  </div>
+)HTML";
 
+// ---- 3) 尾部：按钮 + 说明 + 可选 JS ----
+static const char PAGE_TAIL[] PROGMEM = R"HTML(
+  </div>
   <div class="row">
-    <button class="primary" onclick="shot()">拍一张存卡</button>
-    <a class="btn" href="/capture" download="snap.jpg">直接下载当前帧</a>
-    <button onclick="restart()">重启板子</button>
+    <a class="btn primary" href="/shoot">拍一张存卡</a>
+    <a class="btn" href="/capture" download="snap.jpg">下载当前帧</a>
+    <a class="btn" href="/restart" onclick="return confirm('确定重启板子？')">重启板子</a>
+    <a class="btn" href="/">刷新状态</a>
   </div>
-
-  <footer>速度慢先看信号强度；画面卡住会自动重连。</footer>
+  <p class="note">数值是打开本页那一刻的快照，点"刷新状态"更新；上方画面是实时流。</p>
 </main>
-
+<footer>画质/分辨率调整接口开发中</footer>
 <script>
-const $ = id => document.getElementById(id);
-const img = $('stream');
-
-img.onerror = () => { $('err').textContent = '视频流断开，2 秒后重连…';
-  setTimeout(() => { img.src = '/stream?t=' + Date.now(); $('err').textContent = ''; }, 2000); };
-
-async function status(){
-  try{
-    const r = await fetch('/status', {cache:'no-store'});
-    const s = await r.json();
-    $('mode').textContent = s.mode + (s.ip ? ' · ' + s.ip : '');
-    $('rssi').textContent = s.rssi ? (s.rssi + ' dBm') : '—';
-    $('res').textContent  = s.res;
-    $('fps').textContent  = s.fps.toFixed(1);
-    $('frames').textContent = s.frames;
-    $('heap').textContent = (s.heap/1024).toFixed(0) + ' KB';
-    $('uptime').textContent = Math.floor(s.uptime/1000) + ' s';
-  }catch(e){ $('err').textContent = '状态获取失败'; }
-}
-async function shot(){
-  const r = await fetch('/shoot');
-  const t = await r.text();
-  $('err').textContent = '';
-  alert(t);
-}
-async function restart(){
-  if(!confirm('确定重启？')) return;
-  await fetch('/restart'); $('err').textContent = '已请求重启，页面稍后刷新';
-  setTimeout(()=>location.reload(), 4000);
-}
-setInterval(status, 1000); status();
+/* 有 JS 就顺便每秒刷新一次数值；没有也能正常用上面所有按钮 */
+(function(){
+  if(!window.fetch) return;
+  var ids=['m_mode','m_rssi','m_res','m_fps','m_frames','m_heap','m_uptime','m_sd'];
+  function set(id,val){var e=document.getElementById(id); if(e) e.textContent=val;}
+  function tick(){
+    fetch('/status',{cache:'no-store'}).then(function(r){return r.json();}).then(function(s){
+      set('m_mode', s.mode + (s.ip ? ' · ' + s.ip : ''));
+      set('m_rssi', s.rssi ? s.rssi + ' dBm' : '—');
+      set('m_res', s.res);
+      set('m_fps', Number(s.fps).toFixed(1));
+      set('m_frames', s.frames);
+      set('m_heap', Math.round(s.heap/1024) + ' KB');
+      set('m_uptime', Math.floor(s.uptime/1000) + ' s');
+      set('m_sd', s.sd ? '已挂载' : '未插卡');
+    }).catch(function(){});
+  }
+  setInterval(tick, 1000); tick();
+})();
 </script>
 </body>
 </html>
+)HTML";
+
+// ---- 4) /shoot 结果页 ----
+static const char RESULT_HEAD[] PROGMEM = R"HTML(
+<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>结果</title>
+<style>body{background:#111418;color:#e6e9ef;font:16px/1.6 system-ui,"Microsoft YaHei",sans-serif;
+padding:40px 20px;text-align:center}a{color:#79c0ff}</style></head><body><p>
+)HTML";
+
+static const char RESULT_TAIL[] PROGMEM = R"HTML(
+</p><p><a href="/">← 返回</a></p></body></html>
 )HTML";

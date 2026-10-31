@@ -35,12 +35,35 @@ firmware/webcam/
 ## 编译 / 烧录 / 看日志
 
 ```powershell
-cd E:\ESP32开发\firmware\webcam
-..\..\.venv\Scripts\python.exe -m platformio run -t upload
-..\..\.venv\Scripts\python.exe -m platformio device monitor -p COM16 -b 115200
+cd E:\ESP32开发
+.\scripts\flash.ps1                    # 编译 + 烧录 + 跟串口（推荐）
 ```
 
-或一条命令：`..\..\.venv\Scripts\python.exe -m platformio run -t upload -t monitor`
+或手动：
+
+```powershell
+cd E:\ESP32开发\firmware\webcam
+..\..\.venv\Scripts\python.exe -m platformio run
+cd E:\ESP32开发
+.\.venv\Scripts\python.exe -m esptool -p COM16 -b 460800 write-flash 0x10000 firmware\webcam\.pio\build\esp32s3\firmware.bin
+.\.venv\Scripts\python.exe scripts\serial_monitor.py -p COM16 -b 115200
+```
+
+> ⚠️ 别用 `pio run -t upload`：这块板的 USB-CDC 上 PlatformIO 的上传器会在切换波特率那步
+> 掉线（`No serial data received`），同一根线用 esptool 直写却稳定 2.5 Mbit/s。
+
+## 页面为什么不用 JS
+
+第一版页面靠 JS 拉 `/status` 并绑定按钮，在个别手机浏览器上脚本没跑，导致数值全是"—"、按钮没反应。
+第二版改成：**关键数值由服务端渲染进 HTML，按钮就是普通链接**（`/shoot`、`/capture`、`/restart`），
+JS 只作为"每秒自动刷新数值"的增强，禁用了也不影响任何功能。
+
+固件启动时会自己做一次 HTTP 自检（板子访问自己的 80 端口），串口可见：
+
+```
+[自检] /status 221 字节, 正文: {"mode":"AP","ip":"192.168.4.1","rssi":0,"res":"640x480",...}
+```
+
 
 ## 使用
 

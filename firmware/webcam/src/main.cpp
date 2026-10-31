@@ -128,10 +128,52 @@ static void start_wifi() {
 }
 
 // ---------------- HTTP 处理 ----------------
+// 首页：服务端渲染关键数值，浏览器禁用 JS 也能正常显示与操作
 static esp_err_t h_index(httpd_req_t *req) {
-  httpd_resp_set_type(req, "text/html; charset=utf-8");
+  esp_err_t res = httpd_resp_set_type(req, "text/html; charset=utf-8");
+  if (res != ESP_OK) return res;
   httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-  return httpd_resp_send(req, INDEX_HTML, HTTPD_RESP_USE_STRLEN);
+
+  const bool ap = (WiFi.getMode() == WIFI_AP);
+  IPAddress ip = ap ? WiFi.softAPIP() : WiFi.localIP();
+  int rssi = ap ? 0 : WiFi.RSSI();
+
+  char b[640], rssiTxt[24];
+  if (ap) snprintf(rssiTxt, sizeof(rssiTxt), "热点模式");
+  else    snprintf(rssiTxt, sizeof(rssiTxt), "%d dBm", rssi);
+
+  // ① 文档头 + 顶栏数值
+  res = httpd_resp_send_chunk(req, PAGE_HEAD, strlen(PAGE_HEAD));
+  if (res == ESP_OK) {
+    snprintf(b, sizeof(b),
+             "<span class=\"pill\">%s · %s</span>"
+             "<span class=\"pill warn\">%s</span>",
+             ap ? "AP" : "STA", ip.toString().c_str(), rssiTxt);
+    res = httpd_resp_send_chunk(req, b, strlen(b));
+  }
+
+  // ② 图片 + 状态行（快照值）
+  if (res == ESP_OK) res = httpd_resp_send_chunk(req, PAGE_MID, strlen(PAGE_MID));
+  if (res == ESP_OK) {
+    snprintf(b, sizeof(b),
+             "<span>分辨率 <b>%s</b></span>"
+             "<span>帧率 <b>%.1f</b></span>"
+             "<span>已传 <b>%lu</b> 帧</span>"
+             "<span>堆 <b>%lu KB</b></span>"
+             "<span>运行 <b>%lu s</b></span>"
+             "<span>TF 卡 <b>%s</b></span>",
+             s_res, (double)s_fps,
+             (unsigned long)s_frame_count,
+             (unsigned long)(ESP.getFreeHeap() / 1024),
+             (unsigned long)(millis() / 1000),
+             s_sd_ok ? "已挂载" : "未插卡");
+    res = httpd_resp_send_chunk(req, b, strlen(b));
+  }
+
+  // ③ 按钮 + 收尾
+  if (res == ESP_OK) res = httpd_resp_send_chunk(req, PAGE_TAIL, strlen(PAGE_TAIL));
+  if (res == ESP_OK) res = httpd_resp_send_chunk(req, NULL, 0);
+  return res;
 }
 
 // MJPEG 流：multipart/x-mixed-replace，浏览器 <img> 直接能显示
@@ -189,34 +231,37 @@ static esp_err_t h_capture(httpd_req_t *req) {
   return r;
 }
 
-// 拍照存卡
+// 拍照存卡：返回结果页（不依赖 JS）
 static esp_err_t h_shoot(httpd_req_t *req) {
-  char msg[160];
+  char msg[200];
   camera_fb_t *fb = esp_camera_fb_get();
-  if (!fb) {
-    httpd_resp_sendstr(req, "抓帧失败");
-    return ESP_OK;
-  }
-  if (!s_sd_ok) {
-    esp_camera_fb_return(fb);
-    httpd_resp_sendstr(req, "没有 TF 卡，先插卡再试");
-    return ESP_OK;
-  }
-  char path[64];
-  snprintf(path, sizeof(path), "/photo/%lu.jpg", (unsigned long)millis());
-  File f = SD.open(path, FILE_WRITE);
-  if (!f) {
-    esp_camera_fb_return(fb);
-    httpd_resp_sendstr(req, "写卡失败");
-    return ESP_OK;
-  }
-  size_t n = f.write(fb->buf, fb->len);
-  f.close();
-  esp_camera_fb_return(fb);
 
-  snprintf(msg, sizeof(msg), "已保存 %s（%.1f KB）", path, n / 1024.0);
-  Serial.println(msg);
-  httpd_resp_sendstr(req, msg);
+  if (!fb) {
+    snprintf(msg, sizeof(msg), "抓帧失败");
+  } else if (!s_sd_ok) {
+    snprintf(msg, sizeof(msg), "没有 TF 卡：先插卡再试");
+    esp_camera_fb_return(fb);
+  } else {
+    char path[64];
+    snprintf(path, sizeof(path), "/photo/%lu.jpg", (unsigned long)millis());
+    File f = SD.open(path, FILE_WRITE);
+    if (!f) {
+      snprintf(msg, sizeof(msg), "写卡失败：%s", path);
+      esp_camera_fb_return(fb);
+    } else {
+      size_t n = f.write(fb->buf, fb->len);
+      f.close();
+      esp_camera_fb_return(fb);
+      snprintf(msg, sizeof(msg), "已保存 %s（%.1f KB）", path, n / 1024.0);
+      Serial.println(msg);
+    }
+  }
+
+  httpd_resp_set_type(req, "text/html; charset=utf-8");
+  httpd_resp_send_chunk(req, RESULT_HEAD, strlen(RESULT_HEAD));
+  httpd_resp_send_chunk(req, msg, strlen(msg));
+  httpd_resp_send_chunk(req, RESULT_TAIL, strlen(RESULT_TAIL));
+  httpd_resp_send_chunk(req, NULL, 0);
   return ESP_OK;
 }
 
@@ -250,6 +295,8 @@ static void start_http() {
   cfg.server_port      = 80;
   cfg.ctrl_port        = 32768;
   cfg.max_uri_handlers = 8;
+  cfg.max_open_sockets = 10;     // 图传占 1 个长连接，留够余量给页面与按钮
+  cfg.backlog_conn     = 8;
   cfg.lru_purge_enable = true;
   cfg.stack_size       = 8192;
 
@@ -267,6 +314,32 @@ static void start_http() {
   };
   for (auto &u : uris) httpd_register_uri_handler(s_server, &u);
   Serial.println("[HTTP] 服务已启动，端口 80");
+}
+
+// ---------------- 自检：板子自己访问自己的 80 端口 ----------------
+// 目的：不借助手机/电脑也能确认 HTTP 各接口是否正常（AP 模式下地址是 192.168.4.1）
+static void self_test_http() {
+  IPAddress ip = (WiFi.getMode() == WIFI_AP) ? WiFi.softAPIP() : WiFi.localIP();
+  WiFiClient c;
+  if (!c.connect(ip, 80, 3000)) {
+    Serial.printf("[自检] 连不上 %s:80\n", ip.toString().c_str());
+    return;
+  }
+  c.printf("GET /status HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n",
+           ip.toString().c_str());
+  String resp;
+  uint32_t t0 = millis();
+  while (millis() - t0 < 3000) {
+    while (c.available()) resp += (char)c.read();
+    if (!c.connected() && !c.available()) break;
+    delay(10);
+  }
+  c.stop();
+
+  int body = resp.indexOf("\r\n\r\n");
+  Serial.printf("[自检] /status %u 字节, 正文: %s\n",
+                (unsigned)resp.length(),
+                body >= 0 ? resp.substring(body + 4).c_str() : "(无正文)");
 }
 
 // ---------------- 主流程 ----------------
@@ -287,6 +360,9 @@ void setup() {
 
   IPAddress ip = (WiFi.getMode() == WIFI_AP) ? WiFi.softAPIP() : WiFi.localIP();
   Serial.printf("\n打开浏览器: http://%s/\n\n", ip.toString().c_str());
+
+  delay(300);
+  self_test_http();
 }
 
 void loop() {
