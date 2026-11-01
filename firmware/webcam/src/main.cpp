@@ -14,6 +14,7 @@
 #include <SD.h>
 #include <esp_camera.h>
 #include <esp_http_server.h>
+#include <Update.h>
 #include <Arduino_GFX_Library.h>
 #include <stdarg.h>
 #include <lwip/sockets.h>
@@ -21,6 +22,10 @@
 #include "camera_pins.h"
 #include "wifi_config.h"
 #include "www.h"
+
+#ifndef FW_VERSION
+#define FW_VERSION "0.2.1"
+#endif
 
 // ---------------- 状态 ----------------
 static httpd_handle_t   s_server = nullptr;
@@ -243,6 +248,28 @@ static void lcd_status() {
   s_gfx->printf("Heap %lu KB", (unsigned long)(ESP.getFreeHeap() / 1024));
   s_gfx->setCursor(8, 242);
   s_gfx->printf("Up   %lu s", (unsigned long)(millis() / 1000));
+}
+
+// OTA 进度：整屏显示一行标题 + 进度条（升级期间没人看状态页，屏幕最直观）
+static void lcd_progress(int pct, const char *title) {
+  if (!s_gfx) return;
+  if (pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
+  s_gfx->fillScreen(BLACK);
+  s_gfx->setTextColor(WHITE);
+  s_gfx->setTextSize(2);
+  s_gfx->setCursor(10, 30);
+  s_gfx->println(title);
+  s_gfx->setCursor(10, 80);
+  s_gfx->setTextSize(4);
+  s_gfx->printf("%d%%", pct);
+  // 进度条
+  s_gfx->fillRect(10, 150, 300, 18, 0x3186);
+  s_gfx->fillRect(10, 150, 300 * pct / 100, 18, 0x07E0);
+  s_gfx->setTextSize(1);
+  s_gfx->setTextColor(0x9CF3);
+  s_gfx->setCursor(10, 190);
+  s_gfx->println("please keep power on");
 }
 
 // 关连接：先用 SO_LINGER(1,0) 让 TCP 立即发 RST，把 PCB 还给 lwIP
@@ -626,8 +653,9 @@ static esp_err_t h_status_json(httpd_req_t *req) {
   char b[340];
   const bool ap = (WiFi.getMode() == WIFI_AP);
   snprintf(b, sizeof(b),
-           "{\"mode\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"res\":\"%s\","
+           "{\"ver\":\"%s\",\"mode\":\"%s\",\"ip\":\"%s\",\"rssi\":%d,\"res\":\"%s\","
            "\"fps\":%.1f,\"frames\":%lu,\"viewers\":%d,\"heap\":%lu,\"uptime\":%lu,\"sd\":%s,\"lcd\":%s}",
+           FW_VERSION,
            ap ? "AP" : "STA", cur_ip().toString().c_str(), ap ? 0 : WiFi.RSSI(),
            s_res, (double)s_fps, (unsigned long)s_frame_count, s_viewers,
            (unsigned long)ESP.getFreeHeap(), (unsigned long)millis(),
@@ -656,11 +684,135 @@ static esp_err_t h_restart(httpd_req_t *req) {
   return ESP_OK;
 }
 
+// ---------------- OTA（HTTP 直传固件） ----------------
+// GET  /ota     → 上传页面（手机/电脑浏览器都能用）
+// POST /update  → 原始二进制 app 镜像（Content-Type 任意，必须是 .bin，不是整片 flash）
+static const char OTA_PAGE[] PROGMEM = R"HTML(<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>OTA 升级</title>
+<style>body{background:#111418;color:#e6e6e6;font-family:system-ui;margin:0;padding:18px}
+h1{font-size:18px;margin:0 0 14px}input,button{font-size:16px;padding:12px;margin:8px 0;width:100%;
+box-sizing:border-box;border-radius:8px;border:1px solid #2b3238;background:#1b2026;color:#e6e6e6}
+button{background:#1e6feb;border:0;font-weight:600}#p{height:14px;background:#1b2026;border-radius:7px;
+overflow:hidden;margin-top:12px}#b{height:100%;width:0;background:#1e6feb;transition:width .2s}
+#s{font-size:13px;color:#9aa4ae;margin-top:10px;white-space:pre-wrap;line-height:1.5}</style></head>
+<body><h1>固件升级 (OTA)</h1>
+<input type="file" id="f" accept=".bin,application/octet-stream">
+<button id="go">开始升级</button>
+<div id="p"><div id="b"></div></div><div id="s">选择 firmware.bin 后点开始；升级中不要断电。</div>
+<script>
+var f=document.getElementById('f'),go=document.getElementById('go'),
+    b=document.getElementById('b'),s=document.getElementById('s');
+go.onclick=function(){
+  var file=f.files[0]; if(!file){s.textContent='先选文件';return;}
+  s.textContent='准备上传 '+Math.round(file.size/1024)+' KB';
+  var x=new XMLHttpRequest(); x.open('POST','/update');
+  x.setRequestHeader('Content-Type','application/octet-stream');
+  x.upload.onprogress=function(e){var p=Math.round(e.loaded/e.total*100);
+    b.style.width=p+'%'; s.textContent='上传 '+p+'%  ('+Math.round(e.loaded/1024)+' KB)';};
+  x.onload=function(){s.textContent='HTTP '+x.status+' '+x.responseText;};
+  x.onerror=function(){s.textContent='连接中断——设备正在重启，稍等 10 秒后刷新页面。';};
+  x.send(file);
+};
+</script></body></html>)HTML";
+
+static esp_err_t h_ota_page(httpd_req_t *req) {
+  log_req(req);
+  httpd_resp_set_type(req, "text/html; charset=utf-8");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+  return httpd_resp_send(req, OTA_PAGE, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t h_update(httpd_req_t *req) {
+  log_req(req);
+  const size_t total = req->content_len;
+  if (total < 65536) {
+    httpd_resp_set_status(req, "400 Bad Request");
+    return httpd_resp_send(req, "content too small / no Content-Length", HTTPD_RESP_USE_STRLEN);
+  }
+
+  // 先掐掉流客户端：升级期间不需要它们，也能省出 socket 与内存
+  for (int i = 0; i < MAX_VIEWERS; i++) {
+    if (s_vs[i].active) { drop_client(s_vs[i].c); s_vs[i].active = false; }
+  }
+  s_viewers = 0;
+
+  Serial.printf("[OTA] 开始接收 %u 字节\n", (unsigned)total);
+  lcd_progress(0, "OTA 写入中");
+
+  // 分区表里有 app0/app1 + otadata，Update 会自动写"非运行"那一半
+  if (!Update.begin(total, U_FLASH)) {
+    Serial.printf("[OTA] begin 失败: %s\n", Update.errorString());
+    lcd_progress(0, "OTA 失败");
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    httpd_resp_send(req, Update.errorString(), HTTPD_RESP_USE_STRLEN);
+    return ESP_OK;
+  }
+
+  static uint8_t buf[2048];
+  size_t got = 0;
+  int last_slot = -1;
+  uint32_t last_rx = millis();
+  while (got < total) {
+    int r = httpd_req_recv(req, (char *)buf, sizeof(buf));
+    if (r == HTTPD_SOCK_ERR_TIMEOUT) {
+      if (millis() - last_rx > 20000) {           // 20 秒没有任何数据 → 放弃
+        Serial.println("[OTA] 接收超时，放弃");
+        Update.abort();
+        httpd_resp_set_status(req, "408 Request Timeout");
+        httpd_resp_send(req, "recv timeout", HTTPD_RESP_USE_STRLEN);
+        lcd_progress(0, "OTA 超时");
+        return ESP_OK;
+      }
+      continue;
+    }
+    if (r <= 0) {
+      Serial.printf("[OTA] 接收中断 r=%d，已收 %u/%u\n", r, (unsigned)got, (unsigned)total);
+      Update.abort();
+      httpd_resp_set_status(req, "400 Bad Request");
+      httpd_resp_send(req, "recv failed", HTTPD_RESP_USE_STRLEN);
+      lcd_progress(0, "OTA 中断");
+      return ESP_OK;
+    }
+    last_rx = millis();
+    if (Update.write(buf, r) != (size_t)r) {
+      Serial.printf("[OTA] 写入失败: %s\n", Update.errorString());
+      Update.abort();
+      httpd_resp_set_status(req, "500 Internal Server Error");
+      httpd_resp_send(req, Update.errorString(), HTTPD_RESP_USE_STRLEN);
+      lcd_progress(0, "OTA 写入失败");
+      return ESP_OK;
+    }
+    got += r;
+    int pct = (int)((uint64_t)got * 100 / total);
+    if (pct / 5 != last_slot) {                   // 每 5% 刷新一次屏幕，避免刷屏拖慢接收
+      last_slot = pct / 5;
+      lcd_progress(pct, "OTA 写入中");
+      Serial.printf("[OTA] %d%%\n", pct);
+    }
+  }
+
+  if (!Update.end(true)) {
+    Serial.printf("[OTA] 校验失败: %s\n", Update.errorString());
+    httpd_resp_set_status(req, "500 Internal Server Error");
+    httpd_resp_send(req, Update.errorString(), HTTPD_RESP_USE_STRLEN);
+    lcd_progress(0, "OTA 校验失败");
+    return ESP_OK;
+  }
+
+  Serial.printf("[OTA] 完成，%u 字节，%.1f 秒，准备重启\n", (unsigned)got, (double)millis() / 1000.0);
+  lcd_progress(100, "OTA 完成");
+  httpd_resp_set_type(req, "text/plain; charset=utf-8");
+  httpd_resp_send(req, "OK 升级完成，设备重启中，10 秒后刷新", HTTPD_RESP_USE_STRLEN);
+  delay(800);
+  ESP.restart();
+  return ESP_OK;
+}
+
 static void start_http() {
   httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
   cfg.server_port      = 80;
   cfg.ctrl_port        = 32768;
-  cfg.max_uri_handlers = 10;
+  cfg.max_uri_handlers = 14;
   cfg.max_open_sockets = 4;      // 太小会让请求排队（排队时新连接会被 RST），太大又会挤掉流
   cfg.backlog_conn     = 3;
   cfg.lru_purge_enable = true;
@@ -683,6 +835,8 @@ static void start_http() {
       {"/diag",        HTTP_GET, h_diag,        nullptr},
       {"/favicon.ico", HTTP_GET, h_favicon,     nullptr},
       {"/restart",     HTTP_GET, h_restart,     nullptr},
+      {"/ota",         HTTP_GET, h_ota_page,    nullptr},
+      {"/update",      HTTP_POST, h_update,     nullptr},
   };
   for (auto &u : uris) {
     esp_err_t e = httpd_register_uri_handler(s_server, &u);
@@ -718,7 +872,7 @@ static void self_test() {
 void setup() {
   Serial.begin(115200);
   delay(400);
-  Serial.println("\n=== ESP32-S3-LCD-2 网页图传 v5 ===");
+  Serial.println("\n=== ESP32-S3-LCD-2 网页图传 v" FW_VERSION " ===");
   Serial.printf("芯片 %s rev%d, PSRAM %s, 空闲堆 %lu KB\n",
                 ESP.getChipModel(), ESP.getChipRevision(),
                 psramFound() ? "有" : "无", (unsigned long)(ESP.getFreeHeap() / 1024));
