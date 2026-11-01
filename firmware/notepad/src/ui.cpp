@@ -26,6 +26,8 @@ static int      s_page = 1, s_pages = 0;
 
 // 配色
 #define C_BG      0x0000
+#define C_IMG_BG  0xFFFF   // 图片底色：白纸
+#define C_IMG_FG  0x0000   // 图片墨色：黑字
 #define C_BAR     0x18C3   // 深蓝标题条
 #define C_TITLE   0xFFFF
 #define C_TEXT    0xEF7D
@@ -146,11 +148,45 @@ static int wrap_lines(const Note *n, char out[][NOTE_LINE_BYTES], int max_lines,
   return outn;
 }
 
+// 画 1-bit 位图：位=1 是白（纸），位=0 是黑（字）。按行把连续黑像素合并成一次 HLine
+static void draw_bitmap_1bpp(Arduino_GFX *g, uint16_t w, uint16_t h, const uint8_t *bits) {
+  const int stride = (w + 7) / 8;
+  g->startWrite();          // 整屏一次开写，否则每行都要重设窗口，慢好几倍
+  for (int y = 0; y < h; y++) {
+    const uint8_t *p = bits + (size_t)y * stride;
+    int x0 = -1;
+    for (int x = 0; x <= w; x++) {
+      bool black = (x < w) && !((p[x >> 3] >> (7 - (x & 7))) & 1);
+      if (black && x0 < 0) x0 = x;
+      else if (!black && x0 >= 0) {
+        g->drawFastHLine(x0, y, x - x0, C_IMG_FG);
+        x0 = -1;
+      }
+    }
+  }
+  g->endWrite();
+}
+
 void ui_show_note(int idx) {
   if (!s_gfx) return;
   if (idx < 0) idx = notes_cursor();
   const Note *n = notes_get(idx);
   if (!n) { ui_show_empty(); return; }
+
+  // ---- 图片条目：整屏画图，页脚叠在下方（图片高度已限制在 FOOT_LINE 以内） ----
+  if (n->kind == NK_IMG && n->img) {
+    s_gfx->fillScreen(C_IMG_BG);
+    int ox = (320 - (int)n->iw) / 2;
+    if (ox < 0) ox = 0;
+    s_gfx->startWrite();
+    if (ox) s_gfx->writeFillRect(0, 0, ox, n->ih, C_IMG_BG);
+    s_gfx->endWrite();
+    draw_bitmap_1bpp(s_gfx, n->iw, n->ih, n->img);
+    s_gfx->fillRect(0, FOOT_LINE, 320, 240 - FOOT_LINE, C_BAR);
+    ui_set_page(idx + 1, notes_count());
+    ui_footer_refresh();
+    return;
+  }
 
   clear();
   // 标题条

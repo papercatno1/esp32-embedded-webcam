@@ -47,13 +47,49 @@ static NimBLECharacteristic *s_tx = nullptr;
 static volatile bool s_ble_conn = false;
 static volatile int  s_ble_mtu = 23;
 static volatile uint32_t s_cmd_rx = 0;   // 收到的指令条数（诊断用）
+static char s_last_cmd[56] = "-";        // 最后一条指令（串口抓不到时看这个）
+static char s_last_rep[56] = "-";        // 最后一条回执
 
 struct CmdLine { char text[1600]; };
 static QueueHandle_t s_cmdq = nullptr;
 static char s_rxbuf[1600];
 static size_t s_rxlen = 0;
 
+// ---- 图片接收状态（I/A/E 指令）----
+#define IMG_BUF_MAX (16 * 1024)     // 320x212 二值图最坏 8.5 KB，RLE 后远小于此
+static uint8_t *s_img_buf = nullptr;
+static size_t   s_img_len = 0;
+static int      s_img_w = 0, s_img_h = 0;
+
+// base64 解码（忽略换行与 '='）；返回写入字节数
+static size_t b64_decode(const char *src, uint8_t *dst, size_t cap) {
+  static int8_t tbl[256];
+  static bool init = false;
+  if (!init) {
+    memset(tbl, -1, sizeof(tbl));
+    const char *a = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for (int i = 0; i < 64; i++) tbl[(uint8_t)a[i]] = (int8_t)i;
+    init = true;
+  }
+  size_t n = 0;
+  uint32_t acc = 0;
+  int bits = 0;
+  for (const char *p = src; *p; p++) {
+    int8_t v = tbl[(uint8_t)*p];
+    if (v < 0) continue;            // '='、空白、非法字符都跳过
+    acc = (acc << 6) | (uint32_t)v;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      if (n >= cap) return n;
+      dst[n++] = (uint8_t)((acc >> bits) & 0xFF);
+    }
+  }
+  return n;
+}
+
 static void ble_send(const char *s) {
+  snprintf(s_last_rep, sizeof(s_last_rep), "%.40s", s);
   if (!s_tx || !s_ble_conn) return;
   s_tx->setValue((uint8_t *)s, strlen(s));
   s_tx->notify();
@@ -162,12 +198,12 @@ static esp_err_t h_root(httpd_req_t *req) {
 }
 
 static esp_err_t h_status(httpd_req_t *req) {
-  char buf[480];
+  char buf[640];
   snprintf(buf, sizeof(buf),
            "{\"ver\":\"" FW_VERSION "\",\"up\":%lu,\"heap\":%u,\"wifi\":\"%s\","
            "\"ip\":\"%s\",\"rssi\":%d,\"ble\":%d,\"mtu\":%d,\"notes\":%d,\"cur\":%d,"
            "\"bl\":%d,\"ot\":%lu,\"imu\":%d,\"idle\":%lu,\"rx\":%lu,\"sw\":%lu,"
-           "\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d}",
+           "\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d,\"lc\":\"%s\",\"lr\":\"%s\",\"iw\":%d,\"ih\":%d,\"il\":%u}",
            (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            (WiFi.getMode() == WIFI_AP) ? "ap" : "sta",
            cur_ip().toString().c_str(),
@@ -180,7 +216,8 @@ static esp_err_t h_status(httpd_req_t *req) {
            (unsigned long)s_cmd_rx,
            (unsigned long)power_swipe_count(),
            power_last_swipe_deg(), power_last_swipe_axis(),
-           power_last_mag(), power_peak_mag(), power_get_swipe_sign());
+           power_last_mag(), power_peak_mag(), power_get_swipe_sign(),
+           s_last_cmd, s_last_rep, s_img_w, s_img_h, (unsigned)s_img_len);
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
@@ -283,6 +320,7 @@ static void do_show(int idx) {
 static void handle_cmd(const char *raw) {
   Serial.printf("[CMD] %s\n", raw);
   s_cmd_rx++;
+  snprintf(s_last_cmd, sizeof(s_last_cmd), "%.40s", raw);
   power_activity();          // 任何指令都算一次交互（顺手点亮屏幕）
   char buf[1600];
   strncpy(buf, raw, sizeof(buf) - 1);
@@ -318,6 +356,74 @@ static void handle_cmd(const char *raw) {
     char o[64];
     snprintf(o, sizeof(o), "OK T %d %d", id, notes_count());
     ble_send(o);
+  } else if (!strcmp(cmd, "I")) {
+    // I <宽> <高>：开始收一张图，后续用 A <base64> 逐段送 RLE，最后 E 结束
+    char o[64];
+    int w = 0, h = 0;
+    if (arg) sscanf(arg, "%d %d", &w, &h);
+    if (w <= 0 || h <= 0 || w > IMG_MAX_W || h > IMG_MAX_H) {
+      snprintf(o, sizeof(o), "ERR SIZE");
+      ble_send(o);
+      return;
+    }
+    if (!s_img_buf) {
+      s_img_buf = (uint8_t *)ps_malloc(IMG_BUF_MAX);
+      if (!s_img_buf) s_img_buf = (uint8_t *)malloc(IMG_BUF_MAX);
+    }
+    if (!s_img_buf) {
+      ble_send("ERR NOMEM");
+      return;
+    }
+    s_img_w = w;
+    s_img_h = h;
+    s_img_len = 0;
+    ui_progress(0, "接收图片");
+    snprintf(o, sizeof(o), "OK I START %dx%d", w, h);
+    ble_send(o);
+  } else if (!strcmp(cmd, "A")) {
+    if (!s_img_w || !s_img_buf) {
+      ble_send("ERR NOIMG");
+    } else if (!arg) {
+      ble_send("ERR NOARG");
+    } else {
+      char o[48];
+      size_t room = IMG_BUF_MAX - s_img_len;
+      size_t got = b64_decode(arg, s_img_buf + s_img_len, room);
+      if (got == 0 && room < 4) {
+        ble_send("ERR FULL");
+      } else {
+        s_img_len += got;
+        int pct = (int)(s_img_len * 100 / (IMG_BUF_MAX / 2));   // 进度按半个缓冲区封顶，纯粹给个反馈
+        if (pct > 99) pct = 99;
+        ui_progress(pct, "接收图片");
+        snprintf(o, sizeof(o), "OK A %u", (unsigned)s_img_len);
+        ble_send(o);
+      }
+    }
+  } else if (!strcmp(cmd, "E")) {
+    if (!s_img_w || !s_img_len) {
+      ble_send("ERR NOIMG");
+    } else {
+      char o[64];
+      int id = notes_add_img_rle(nullptr, (uint16_t)s_img_w, (uint16_t)s_img_h, s_img_buf, s_img_len, false);
+      if (id < 0) {
+        ble_send("ERR DECODE");
+      } else {
+        Note *it = notes_find(id);
+        uint32_t hv = (it && it->img) ? notes_img_hash(it->img, (size_t)((it->iw + 7) / 8) * it->ih) : 0;
+        snprintf(o, sizeof(o), "OK E %d %u %08X", id, (unsigned)s_img_len, (unsigned)hv);
+        ble_send(o);             // ①先回执（此刻还没碰 flash，和 A 一样在 BLE 活跃期）
+        notes_save();            // ②再落盘（写 flash 期间 BLE 会卡 1 秒以上）
+        do_show(notes_cursor()); // ③最后刷屏
+      }
+      s_img_w = s_img_h = 0;
+      s_img_len = 0;   // 缓冲区留着复用（下次 I 直接覆盖）
+    }
+  } else if (!strcmp(cmd, "Z")) {
+    s_img_w = s_img_h = 0;
+    s_img_len = 0;
+    do_show(notes_cursor());
+    ble_send("OK Z");
   } else if (!strcmp(cmd, "L")) {
     char o[32];
     snprintf(o, sizeof(o), "OK L %d", notes_count());
@@ -470,6 +576,14 @@ void loop() {
   if (sw != 0 && notes_count() > 1) {
     do_show(notes_cursor() + (sw > 0 ? 1 : -1));
     power_activity();
+  }
+
+  // 广播看门狗：客户端非正常断开时 NimBLE 有时不会自己恢复广播
+  // （isAdvertising() 还会骗人说"在广播"，所以每 5 秒无脑重开一次，重开是无害的）
+  static uint32_t last_adv = 0;
+  if (!s_ble_conn && millis() - last_adv > 5000) {
+    last_adv = millis();
+    NimBLEDevice::startAdvertising();
   }
 
   static uint32_t last = 0;

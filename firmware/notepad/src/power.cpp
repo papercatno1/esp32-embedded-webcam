@@ -12,6 +12,13 @@
 #define SWIPE_END_DPS    25.0f  // 低于这个值算这次甩动结束
 #define SWIPE_MIN_DEG    30.0f  // 累计转过的角度超过多少度才算数
 #define SWIPE_COOLDOWN   450    // 两次甩动最小间隔（ms）
+
+// 回位抑制：甩出去之后手一定带一次反向回位，那一下不能算成"反着翻"。
+// 规则：①收尾后必须静止够 REST_MS 才允许下一次起手；②接受后 RETURN_GUARD_MS 内
+// 同轴反号的手势直接丢弃（回位）。正常连甩是"甩→回位→停一下→再甩"，不受影响。
+#define REST_DPS         15.0f  // 低于这个角速度算静止
+#define REST_MS          120    // 连续静止多久才算"手已收回位"
+#define RETURN_GUARD_MS  600    // 接受一次甩动后，这段时间内的反向手势当回位
 // 快速一挥时超过 START 的采样点很少，累计角度偏小；用峰值兜底：
 // 峰值够大 + 至少转了 SWIPE_MIN_DEG_FALLBACK 度，也认
 #define SWIPE_PEAK_FALLBACK_DPS 600.0f
@@ -38,6 +45,7 @@ static int      s_pending = 0;       // -1 上一条 / +1 下一条
 static uint32_t s_gesture_ms = 0;    // 本次手势起始时间（超时强制结算，避免一直"卡在甩动中"）
 static float    s_g_peak     = 0;    // 本次手势内的角速度峰值
 static uint32_t s_last_sample_ms = 0;  // 上一次采样时刻（用来算真实 dt）
+static uint32_t s_motion_ms = 0;       // 最后一次有明显转动的时刻（判断手是否已停稳）
 static uint32_t s_swipe_count = 0;
 static float    s_last_mag  = 0;     // 最近一次合成角速度（dps）
 static float    s_peak_mag  = 0;     // 上电以来峰值（dps）
@@ -129,6 +137,13 @@ static void swipe_finish() {
     return;
   }
 
+  // 回位抑制：刚接受过一次甩动，紧接着同轴反号的那一下就是手收回来的动作
+  if (s_last_swipe && millis() - s_last_swipe < RETURN_GUARD_MS &&
+      axis == s_last_axis && ((val > 0) != (s_last_deg > 0))) {
+    Serial.printf("[PWR] 回位动作 %.1f度（上一次 %.1f度）-> 忽略\n", val, s_last_deg);
+    return;
+  }
+
   s_last_swipe = millis();
   s_last_deg = val;
   s_last_axis = axis;
@@ -143,6 +158,7 @@ static void swipe_finish() {
 
   s_pending = dir;
   s_last_ms = millis();
+  s_motion_ms = millis();   // 手还在回位，重新等静止
 }
 
 void power_tick() {
@@ -185,6 +201,9 @@ void power_tick() {
 
   // ---- 甩动翻页（亮屏时生效；熄屏时也能用来唤醒） ----
   float mag = sqrtf(gx * gx + gy * gy + gz * gz);
+  // 起手前必须"静止够久"：甩完手回位的那一段一定还在动，靠这条把手收回来也算一个手势挡掉
+  bool armed = (now - s_motion_ms) >= REST_MS;
+  if (mag >= REST_DPS) s_motion_ms = now;
   s_last_mag = mag;
   if (mag > s_peak_mag) s_peak_mag = mag;
   if (mag > 60.0f) {
@@ -195,7 +214,7 @@ void power_tick() {
     }
   }
   if (!s_in_gesture) {
-    if (mag > SWIPE_START_DPS) {
+    if (mag > SWIPE_START_DPS && armed) {
       s_in_gesture = true;
       s_gesture_ms = now;
       s_g_peak = mag;

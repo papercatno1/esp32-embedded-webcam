@@ -129,6 +129,12 @@
             android:text="翻转方向" />
     </LinearLayout>
 
+    <Button
+        android:id="@+id/btnImage"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="选图发送到屏幕" />
+
     <EditText
         android:id="@+id/input"
         android:layout_width="match_parent"

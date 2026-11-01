@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.activity.result.contract.ActivityResultContracts
 import android.os.Bundle
 import android.widget.Button
 import android.widget.EditText
@@ -13,7 +14,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
-class MainActivity : Activity() {
+class MainActivity : androidx.activity.ComponentActivity() {
 
     private lateinit var ble: BleLink
     private lateinit var statusView: TextView
@@ -22,7 +23,7 @@ class MainActivity : Activity() {
     private lateinit var input: EditText
     private var lastReply = ""
 
-    private val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    private val permissions: Array<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         arrayOf(
             Manifest.permission.BLUETOOTH_SCAN,
             Manifest.permission.BLUETOOTH_CONNECT
@@ -75,6 +76,8 @@ class MainActivity : Activity() {
         // 甩动翻页方向反了就点这个：K t 让设备自己取反并保存到 NVS
         findViewById<Button>(R.id.btnFlipSign).setOnClickListener { send("K t") }
 
+        findViewById<Button>(R.id.btnImage).setOnClickListener { pickImage.launch("image/*") }
+
         updateStatus()
     }
 
@@ -83,7 +86,7 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(
         requestCode: Int,
-        permissions: Array<out String>,
+        permissions: Array<String>,
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -137,6 +140,82 @@ class MainActivity : Activity() {
             return
         }
         ble.send(cmd)
+    }
+
+    // ---------------- 图片：选图 -> 缩到 320x212 -> 二值 -> RLE -> base64 -> I/A/E ----------------
+
+    private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        if (uri != null) sendImage(uri)
+    }
+
+    /** 把位图转成 1-bit（1=白 0=黑），行按字节对齐、MSB 在前 */
+    private fun bitmapToBits(bmp: android.graphics.Bitmap): ByteArray {
+        val w = bmp.width
+        val h = bmp.height
+        val stride = (w + 7) / 8
+        val out = ByteArray(stride * h)
+        val row = IntArray(w)
+        for (y in 0 until h) {
+            bmp.getPixels(row, 0, w, 0, y, w, 1)
+            val base = y * stride
+            for (x in 0 until w) {
+                val c = row[x]
+                val lum = (299 * ((c shr 16) and 0xFF) + 587 * ((c shr 8) and 0xFF) + 114 * (c and 0xFF)) / 1000
+                if (lum >= 128) out[base + (x shr 3)] = (out[base + (x shr 3)].toInt() or (0x80 shr (x and 7))).toByte()
+            }
+        }
+        return out
+    }
+
+    /** 1-bit 位图 RLE：成对 [count][value]，value 只能是 0x00 / 0xFF */
+    private fun rleEncode(bits: ByteArray): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        var i = 0
+        while (i < bits.size) {
+            val v = bits[i]
+            var run = 1
+            while (i + run < bits.size && bits[i + run] == v && run < 255) run++
+            out.write(run)
+            out.write(v.toInt() and 0xFF)
+            i += run
+        }
+        return out.toByteArray()
+    }
+
+    private fun sendImage(uri: android.net.Uri) {
+        if (!ble.ready) {
+            toast(if (ble.connected) "还在等服务就绪，稍等下" else "还没连上设备")
+            return
+        }
+        val src = try {
+            contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it) }
+        } catch (e: Exception) {
+            null
+        }
+        if (src == null) {
+            toast("这张图读不出来")
+            return
+        }
+        // 按比例缩到 320x212 以内
+        val scale = minOf(320f / src.width, 212f / src.height, 1f)
+        val w = (src.width * scale).toInt().coerceAtLeast(1)
+        val h = (src.height * scale).toInt().coerceAtLeast(1)
+        val small = android.graphics.Bitmap.createScaledBitmap(src, w, h, true)
+        val bits = bitmapToBits(small)
+        val rle = rleEncode(bits)
+        val b64 = android.util.Base64.encodeToString(rle, android.util.Base64.NO_WRAP)
+
+        appendLog("图片 ${w}x$h  位图 ${bits.size} B  RLE ${rle.size} B")
+
+        // 每行 380 个 base64 字符（4 的倍数，保证设备逐行解码时字节对齐）
+        val chunk = 380
+        ble.send("I $w $h")
+        var i = 0
+        while (i < b64.length) {
+            ble.send("A " + b64.substring(i, minOf(i + chunk, b64.length)))
+            i += chunk
+        }
+        ble.send("E")
     }
 
     private fun appendLog(msg: String) {

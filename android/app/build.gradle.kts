@@ -11,8 +11,8 @@ android {
         applicationId = "com.papercatno1.notepad"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "0.2.0"
+        versionCode = 3
+        versionName = "0.3.0"
     }
 
     buildTypes {
@@ -31,6 +31,7 @@ android {
     }
 }
 
-// 无第三方依赖：只用平台 API + Kotlin 标准库，构建快、体积小
+// 仅一个 androidx.activity：选图要用 registerForActivityResult
 dependencies {
+    implementation("androidx.activity:activity-ktx:1.9.0")
 }
