@@ -167,7 +167,7 @@ static esp_err_t h_status(httpd_req_t *req) {
            "{\"ver\":\"" FW_VERSION "\",\"up\":%lu,\"heap\":%u,\"wifi\":\"%s\","
            "\"ip\":\"%s\",\"rssi\":%d,\"ble\":%d,\"mtu\":%d,\"notes\":%d,\"cur\":%d,"
            "\"bl\":%d,\"ot\":%lu,\"imu\":%d,\"idle\":%lu,\"rx\":%lu,\"sw\":%lu,"
-           "\"swd\":%.1f,\"swa\":\"%c\"}",
+           "\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f}",
            (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            (WiFi.getMode() == WIFI_AP) ? "ap" : "sta",
            cur_ip().toString().c_str(),
@@ -179,7 +179,8 @@ static esp_err_t h_status(httpd_req_t *req) {
            (unsigned long)(power_idle_ms() / 1000),
            (unsigned long)s_cmd_rx,
            (unsigned long)power_swipe_count(),
-           power_last_swipe_deg(), power_last_swipe_axis());
+           power_last_swipe_deg(), power_last_swipe_axis(),
+           power_last_mag(), power_peak_mag());
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
@@ -271,9 +272,12 @@ static void wifi_begin() {
 
 // ---------------- 指令处理 ----------------
 static void do_show(int idx) {
-  notes_set_cursor(idx);
-  if (notes_count() == 0) ui_show_empty();
-  else ui_show_note(idx);
+  notes_set_cursor(idx);          // 内部按条数取模
+  if (notes_count() == 0) {
+    ui_show_empty();              // 只有一条都没有时才显示「等待推送」
+    return;
+  }
+  ui_show_note(notes_cursor());   // 必须用取模后的游标，否则越界会画成空白页
 }
 
 static void handle_cmd(const char *raw) {
@@ -385,10 +389,12 @@ static void handle_cmd(const char *raw) {
     else snprintf(o, sizeof(o), "ERR IMU");
     ble_send(o);
   } else if (!strcmp(cmd, "Q")) {
-    // 甩动统计：次数 / 最近角度 / 轴，用来标定翻页灵敏度和方向
-    char o[96];
-    snprintf(o, sizeof(o), "OK Q %lu %.1f %c", (unsigned long)power_swipe_count(),
-             power_last_swipe_deg(), power_last_swipe_axis());
+    // 甩动统计：次数 / 最近角度 / 轴 + 实时与峰值角速度（判断传感器看不看得见你甩）
+    char o[128];
+    snprintf(o, sizeof(o), "OK Q %lu %.1f %c | now %.0f peak %.0f",
+             (unsigned long)power_swipe_count(),
+             power_last_swipe_deg(), power_last_swipe_axis(),
+             power_last_mag(), power_peak_mag());
     ble_send(o);
   } else if (cmd[0]) {
     ble_send("ERR UNKNOWN");

@@ -36,3 +36,8 @@ float    power_last_impulse();     // 最近一次敲击的加速度变化量（
 float    power_last_swipe_deg();   // 最近一次甩动累计转角（度）
 char     power_last_swipe_axis();  // 'x' / 'y' / 'z'
 uint32_t power_swipe_count();      // 甩动次数
+
+// 陀螺仪实时读数，用来判断"传感器到底看不看得见你在甩"
+float    power_last_mag();         // 最近一次采样的合成角速度（dps）
+float    power_peak_mag();         // 上电以来的角速度峰值（dps）
+void     power_reset_peak();       // 清零峰值（发 `Q` 前用）

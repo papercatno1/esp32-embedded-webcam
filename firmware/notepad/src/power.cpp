@@ -7,9 +7,9 @@
 #define TAP_COOLDOWN   500     // 两次敲击最小间隔（ms）
 #define SAMPLE_MS      25      // 采样周期（ms）
 
-#define SWIPE_START_DPS 120.0f  // 角速度超过这个值开始记录一次甩动
-#define SWIPE_END_DPS    45.0f  // 低于这个值算这次甩动结束
-#define SWIPE_MIN_DEG    50.0f  // 累计转过的角度超过多少度才算数
+#define SWIPE_START_DPS  80.0f  // 角速度超过这个值开始记录一次甩动（原 120，实测手甩峰值偏低）
+#define SWIPE_END_DPS    30.0f  // 低于这个值算这次甩动结束
+#define SWIPE_MIN_DEG    30.0f  // 累计转过的角度超过多少度才算数
 #define SWIPE_COOLDOWN   700    // 两次甩动最小间隔（ms）
 // 方向：+1 = 顺时针（多数人理解的"往右甩"）；方向反了就改成 -1
 #define SWIPE_DIR_SIGN   1
@@ -30,7 +30,10 @@ static uint32_t s_last_swipe = 0;
 static float    s_last_deg = 0;
 static char     s_last_axis = '-';
 static int      s_pending = 0;       // -1 上一条 / +1 下一条
+static uint32_t s_gesture_ms = 0;    // 本次手势起始时间（超时强制结算，避免一直"卡在甩动中"）
 static uint32_t s_swipe_count = 0;
+static float    s_last_mag  = 0;     // 最近一次合成角速度（dps）
+static float    s_peak_mag  = 0;     // 上电以来峰值（dps）
 
 void power_begin(uint32_t idle_ms) {
   s_timeout_ms = idle_ms;
@@ -85,6 +88,9 @@ int power_take_swipe() {
 float power_last_swipe_deg() { return s_last_deg; }
 char  power_last_swipe_axis() { return s_last_axis; }
 uint32_t power_swipe_count() { return s_swipe_count; }
+float    power_last_mag() { return s_last_mag; }
+float    power_peak_mag() { return s_peak_mag; }
+void     power_reset_peak() { s_peak_mag = 0; }
 
 // 记录一次甩动：挑累计角度最大的轴，用它的符号定方向
 static void swipe_finish() {
@@ -151,9 +157,19 @@ void power_tick() {
 
   // ---- 甩动翻页（亮屏时生效；熄屏时也能用来唤醒） ----
   float mag = sqrtf(gx * gx + gy * gy + gz * gz);
+  s_last_mag = mag;
+  if (mag > s_peak_mag) s_peak_mag = mag;
+  if (mag > 60.0f) {
+    static uint32_t last_log = 0;
+    if (now - last_log > 300) {
+      last_log = now;
+      Serial.printf("[IMU] ω=%.0f dps (%.0f/%.0f/%.0f)\n", mag, gx, gy, gz);
+    }
+  }
   if (!s_in_gesture) {
     if (mag > SWIPE_START_DPS) {
       s_in_gesture = true;
+      s_gesture_ms = now;
       s_deg_x = gx * (SAMPLE_MS / 1000.0f);
       s_deg_y = gy * (SAMPLE_MS / 1000.0f);
       s_deg_z = gz * (SAMPLE_MS / 1000.0f);
@@ -162,7 +178,7 @@ void power_tick() {
     s_deg_x += gx * (SAMPLE_MS / 1000.0f);
     s_deg_y += gy * (SAMPLE_MS / 1000.0f);
     s_deg_z += gz * (SAMPLE_MS / 1000.0f);
-    if (mag < SWIPE_END_DPS) {
+    if (mag < SWIPE_END_DPS || (now - s_gesture_ms) > 1500) {
       s_in_gesture = false;
       swipe_finish();
     }
