@@ -116,6 +116,7 @@ Wi-Fi 凭据放 `firmware/webcam/src/wifi_secrets.h`，**该文件不入库**。
 | `A <base64>` | 送一段 RLE（base64，可多次） | `OK A <累计字节>` |
 | `E` | 结束收图（解码 + 落盘 + 上屏） | `OK E <id> <字节> <FNV32>` |
 | `Z` | 放弃本次收图 | `OK Z` |
+| `M` | 看 TF 卡（现场挂载 + 类型容量） | `OK M <类型> <MB>` / `ERR NOCARD` / `ERR NOFAT` |
 | `A` / `G` | 读三轴加速度 / 加速度 + 陀螺仪 |
 
 熄屏后敲一下板子（或桌面）就亮，不用按键——`GPIO0` 是 BOOT + LCD 复位脚，碰它会复位屏幕。

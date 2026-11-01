@@ -1,5 +1,13 @@
 # 更新记录
 
+## v0.7.1 — 2026-11-01 · 票据屏识别 TF 卡
+
+- 固件 `M` 指令：挂载 TF 卡并回类型/容量；`/status.json` 加 `sd`、`sdm`
+- 开机自动探一次卡；挂载失败先降速到 4 MHz 再试
+- 失败分两种：`ERR NOCARD`（没插卡）/ `ERR NOFAT`（卡在但文件系统不认，通常是 exFAT）
+- 实测：32 GB SDHC 挂上，29818 MB
+- 构建坑：中文路径下 ld 报 `cannot open map file ...: Invalid argument`，用 `mklink /J C:\esp32np firmware\notepad` 建 ASCII 路径编译即可
+
 ## v0.7.0 — 2026-11-01 · 传图片上屏（1-bit + RLE）+ 甩动回位抑制
 
 ### 票据屏固件 0.3.1

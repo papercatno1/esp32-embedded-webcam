@@ -26,6 +26,7 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <esp_http_server.h>
+#include <SD.h>
 #include <Update.h>
 #include <NimBLEDevice.h>
 
@@ -86,6 +87,46 @@ static size_t b64_decode(const char *src, uint8_t *dst, size_t cap) {
     }
   }
   return n;
+}
+
+// ---- TF 卡（和 LCD 共用 SCK39/MOSI38，CS41、MISO40）----
+static SPIClass s_sd_spi(HSPI);
+static bool     s_sd_ok = false;
+static uint64_t s_sd_mb = 0;
+static bool     s_sd_hi_done = false;
+static bool     s_sd_present = false;
+
+// 低层探一下：只发 CMD0，看卡在不在（区分"没卡"和"卡在但格式不认"）
+static bool sd_card_present() {
+  pinMode(41, OUTPUT);
+  digitalWrite(41, HIGH);
+  s_sd_spi.beginTransaction(SPISettings(400000, MSBFIRST, SPI_MODE0));
+  for (int i = 0; i < 10; i++) s_sd_spi.transfer(0xFF);   // 80 个空时钟唤醒卡
+  digitalWrite(41, LOW);
+  const uint8_t cmd0[6] = {0x40, 0, 0, 0, 0, 0x95};        // CMD0 + CRC7(0x95)
+  for (int i = 0; i < 6; i++) s_sd_spi.transfer(cmd0[i]);
+  uint8_t r1 = 0xFF;
+  for (int i = 0; i < 8 && (r1 & 0x80); i++) r1 = s_sd_spi.transfer(0xFF);
+  digitalWrite(41, HIGH);
+  s_sd_spi.transfer(0xFF);
+  s_sd_spi.endTransaction();
+  return (r1 != 0xFF);
+}
+
+static bool sd_probe() {
+  if (!s_sd_hi_done) { s_sd_spi.begin(39, 40, 38, 41); s_sd_hi_done = true; }
+  s_sd_ok = SD.begin(41, s_sd_spi, 20000000);
+  if (!s_sd_ok) s_sd_ok = SD.begin(41, s_sd_spi, 4000000);  // 慢速再试一次（老卡常见）
+  if (!s_sd_ok) {
+    s_sd_present = sd_card_present();
+    s_sd_mb = 0;
+    Serial.printf("[SD] 挂载失败（卡%s）\n", s_sd_present ? "在，但不认格式" : "不在");
+    return false;
+  }
+  s_sd_mb = SD.cardSize() / (1024ULL * 1024ULL);
+  s_sd_present = true;
+  Serial.printf("[SD] 已挂载 %llu MB\n", (unsigned long long)s_sd_mb);
+  return true;
 }
 
 static void ble_send(const char *s) {
@@ -203,7 +244,7 @@ static esp_err_t h_status(httpd_req_t *req) {
            "{\"ver\":\"" FW_VERSION "\",\"up\":%lu,\"heap\":%u,\"wifi\":\"%s\","
            "\"ip\":\"%s\",\"rssi\":%d,\"ble\":%d,\"mtu\":%d,\"notes\":%d,\"cur\":%d,"
            "\"bl\":%d,\"ot\":%lu,\"imu\":%d,\"idle\":%lu,\"rx\":%lu,\"sw\":%lu,"
-           "\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d,\"lc\":\"%s\",\"lr\":\"%s\",\"iw\":%d,\"ih\":%d,\"il\":%u}",
+           "\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d,\"sd\":%d,\"sdm\":%llu,\"lc\":\"%s\",\"lr\":\"%s\",\"iw\":%d,\"ih\":%d,\"il\":%u}",
            (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            (WiFi.getMode() == WIFI_AP) ? "ap" : "sta",
            cur_ip().toString().c_str(),
@@ -217,6 +258,7 @@ static esp_err_t h_status(httpd_req_t *req) {
            (unsigned long)power_swipe_count(),
            power_last_swipe_deg(), power_last_swipe_axis(),
            power_last_mag(), power_peak_mag(), power_get_swipe_sign(),
+           s_sd_ok ? 1 : 0, (unsigned long long)s_sd_mb,
            s_last_cmd, s_last_rep, s_img_w, s_img_h, (unsigned)s_img_len);
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -504,6 +546,20 @@ static void handle_cmd(const char *raw) {
              notes_count() > 0 ? notes_cursor() + 1 : 0, notes_count(),
              power_get_swipe_sign());
     ble_send(o);
+  } else if (!strcmp(cmd, "M")) {
+    // 看 TF 卡：第一次会现场挂载（探测会扰动 SPI，之后重画一帧自愈）
+    char o[96];
+    bool ok = s_sd_ok || sd_probe();
+    if (!ok) {
+      snprintf(o, sizeof(o), s_sd_present ? "ERR NOFAT" : "ERR NOCARD");
+    } else {
+      int t = SD.cardType();
+      const char *tn = (t == CARD_MMC) ? "MMC" : (t == CARD_SD) ? "SD"
+                     : (t == CARD_SDHC) ? "SDHC" : "?";
+      snprintf(o, sizeof(o), "OK M %s %llu", tn, (unsigned long long)s_sd_mb);
+    }
+    ble_send(o);
+    if (notes_count() > 0) ui_show_note(notes_cursor()); else ui_show_empty();
   } else if (!strcmp(cmd, "K")) {
     // 翻页方向：K 1 / K -1；K t = 翻转；不带参数就查询
     if (arg) {
@@ -531,6 +587,7 @@ void setup() {
 
   qmi_begin();          // 板上 QMI8658：敲击唤醒 + 甩动翻页
   power_begin(60000);   // 60 秒无交互熄屏；0 = 常亮
+  sd_probe();           // 开机就探一次 TF 卡（status.json 里能看到）
   ui_set_timeout_s(power_timeout() / 1000);
   ui_set_link(false);
 
