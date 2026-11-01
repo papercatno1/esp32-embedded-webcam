@@ -1,0 +1,385 @@
+// ESP32-S3-LCD-2 票据屏 M1
+//
+// 手机通过 BLE(NUS) 推送条目，设备存 FFat 并显示在 320x240 屏幕上。
+// 同时保留 WiFi + HTTP OTA（http://esp32note.local/ota），方便无线升级。
+//
+// BLE 服务：Nordic UART Service
+//   RX 6E400002-B5A3-F393-E0A9-E50E24DCCA9E  write      手机 -> 设备
+//   TX 6E400003-B5A3-F393-E0A9-E50E24DCCA9E  notify     设备 -> 手机
+// 协议：一行一条指令，以 '\n' 结尾，UTF-8
+//   V                      -> OK V <ver>
+//   T <标题>|<行1>|<行2>…  -> OK T <id> <总数>
+//   L                      -> OK L <总数>  随后每条 ITEM <id> <标题>
+//   P <id>                 -> OK P <id>
+//   N / R                  -> 下一条 / 上一条
+//   D <id>                 -> OK D <id>
+//   C                      -> OK C
+//   B <0-100>              -> OK B <pct>
+//   S <0|1>                -> OK S <0|1>
+//   其它                   -> ERR UNKNOWN
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <ESPmDNS.h>
+#include <esp_http_server.h>
+#include <Update.h>
+#include <NimBLEDevice.h>
+
+#include "wifi_config.h"
+#include "cjk.h"
+#include "notes.h"
+#include "ui.h"
+
+#define FW_VERSION "0.1.0"
+
+// ---------------- BLE ----------------
+#define NUS_SVC "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
+#define NUS_RX  "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
+#define NUS_TX  "6E400003-B5A3-F393-E0A9-E50E24DCCA9E"
+
+static NimBLECharacteristic *s_tx = nullptr;
+static volatile bool s_ble_conn = false;
+static volatile int  s_ble_mtu = 23;
+
+struct CmdLine { char text[1600]; };
+static QueueHandle_t s_cmdq = nullptr;
+static char s_rxbuf[1600];
+static size_t s_rxlen = 0;
+
+static void ble_send(const char *s) {
+  if (!s_tx || !s_ble_conn) return;
+  s_tx->setValue((uint8_t *)s, strlen(s));
+  s_tx->notify();
+  Serial.printf("[BLE>] %s\n", s);
+}
+
+class RxCallbacks : public NimBLECharacteristicCallbacks {
+  void onWrite(NimBLECharacteristic *c) override {
+    std::string v = c->getValue();
+    for (unsigned char ch : v) {
+      if (ch == '\n' || ch == '\r') {
+        if (s_rxlen == 0) continue;
+        s_rxbuf[s_rxlen] = 0;
+        CmdLine cl;
+        strncpy(cl.text, s_rxbuf, sizeof(cl.text) - 1);
+        cl.text[sizeof(cl.text) - 1] = 0;
+        s_rxlen = 0;
+        if (s_cmdq) xQueueSend(s_cmdq, &cl, 0);
+      } else if (s_rxlen < sizeof(s_rxbuf) - 1) {
+        s_rxbuf[s_rxlen++] = (char)ch;
+      }
+    }
+  }
+};
+
+class SrvCallbacks : public NimBLEServerCallbacks {
+  void onConnect(NimBLEServer *s) override {
+    s_ble_conn = true;
+    Serial.println("[BLE] 已连接");
+  }
+  void onMTUChange(uint16_t mtu, ble_gap_conn_desc *desc) override {
+    s_ble_mtu = mtu;
+    Serial.printf("[BLE] MTU=%u\n", mtu);
+  }
+  void onDisconnect(NimBLEServer *s) override {
+    s_ble_conn = false;
+    Serial.println("[BLE] 断开，重新广播");
+    NimBLEDevice::startAdvertising();
+  }
+};
+
+static void ble_begin() {
+  NimBLEDevice::init("ESP32-NOTE");
+  NimBLEDevice::setMTU(517);
+  NimBLEServer *srv = NimBLEDevice::createServer();
+  srv->setCallbacks(new SrvCallbacks());
+  NimBLEService *svc = srv->createService(NUS_SVC);
+  NimBLECharacteristic *rx = svc->createCharacteristic(
+      NUS_RX, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+  rx->setCallbacks(new RxCallbacks());
+  s_tx = svc->createCharacteristic(NUS_TX, NIMBLE_PROPERTY::NOTIFY);
+  svc->start();
+
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  adv->addServiceUUID(NUS_SVC);
+  adv->setScanResponse(true);
+  adv->setMinPreferred(0x06);
+  NimBLEDevice::startAdvertising();
+  Serial.println("[BLE] 广播中: ESP32-NOTE");
+}
+
+// ---------------- WiFi / OTA ----------------
+static httpd_handle_t s_http = nullptr;
+static bool s_wifi_ok = false;
+
+static IPAddress cur_ip() {
+  return (WiFi.getMode() == WIFI_AP) ? WiFi.softAPIP() : WiFi.localIP();
+}
+
+static const char OTA_PAGE[] PROGMEM =
+  "<!doctype html><meta charset=utf-8><title>OTA</title>"
+  "<style>body{font:16px/1.6 sans-serif;margin:24px;max-width:520px}"
+  "button{padding:10px 18px;font-size:16px}#p{height:18px;background:#eee}"
+  "#b{height:18px;background:#3b82f6;width:0}</style>"
+  "<h2>ESP32-NOTE 固件升级</h2>"
+  "<p>选 .bin 文件 → 上传 → 自动重启</p>"
+  "<input id=f type=file accept=.bin><button onclick=go()>上传升级</button>"
+  "<div id=p><div id=b></div></div><p id=s></p>"
+  "<script>function go(){var f=document.getElementById('f').files[0];"
+  "if(!f){alert('先选文件');return}"
+  "var x=new XMLHttpRequest();x.open('POST','/update');"
+  "x.upload.onprogress=function(e){var p=e.loaded/e.total*100;"
+  "document.getElementById('b').style.width=p+'%';"
+  "document.getElementById('s').textContent='上传中 '+p.toFixed(0)+'%'};"
+  "x.onload=function(){document.getElementById('s').textContent="
+  "x.status==200?'完成，等待重启…':'失败: '+x.responseText};"
+  "x.onerror=function(){document.getElementById('s').textContent='网络错误'};"
+  "x.setRequestHeader('Content-Type','application/octet-stream');"
+  "x.send(f)}</script>";
+
+static esp_err_t h_root(httpd_req_t *req) {
+  String s = "<!doctype html><meta charset=utf-8><meta http-equiv=refresh content=5>"
+             "<style>body{font:18px/1.8 sans-serif;margin:24px}</style>";
+  s += "<h2>ESP32-NOTE 票据屏</h2>";
+  s += "<p>固件: " FW_VERSION "</p>";
+  s += "<p>IP: " + cur_ip().toString() + "</p>";
+  s += "<p>条目: " + String(notes_count()) + " 条</p>";
+  s += "<p>BLE: " + String(s_ble_conn ? "已连接" : "广播中") + "</p>";
+  s += "<p><a href=/ota>固件升级</a></p>";
+  httpd_resp_set_type(req, "text/html; charset=utf-8");
+  return httpd_resp_send(req, s.c_str(), s.length());
+}
+
+static esp_err_t h_status(httpd_req_t *req) {
+  char buf[320];
+  snprintf(buf, sizeof(buf),
+           "{\"ver\":\"" FW_VERSION "\",\"up\":%lu,\"heap\":%u,\"wifi\":\"%s\","
+           "\"ip\":\"%s\",\"rssi\":%d,\"ble\":%d,\"mtu\":%d,\"notes\":%d,\"cur\":%d}",
+           (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
+           (WiFi.getMode() == WIFI_AP) ? "ap" : "sta",
+           cur_ip().toString().c_str(),
+           (WiFi.getMode() == WIFI_AP) ? 0 : WiFi.RSSI(),
+           (int)s_ble_conn, s_ble_mtu, notes_count(), notes_cursor());
+  httpd_resp_set_type(req, "application/json");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t h_ota_page(httpd_req_t *req) {
+  httpd_resp_set_type(req, "text/html; charset=utf-8");
+  return httpd_resp_send(req, OTA_PAGE, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t h_update(httpd_req_t *req) {
+  if (req->content_len <= 0) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body");
+  Serial.printf("[OTA] 开始 %u 字节\n", (unsigned)req->content_len);
+  ui_progress(0, "固件升级中");
+
+  if (!Update.begin(req->content_len, U_FLASH)) {
+    ui_message("升级失败", Update.errorString());
+    return httpd_resp_send(req, Update.errorString(), HTTPD_RESP_USE_STRLEN);
+  }
+  uint8_t buf[2048];
+  size_t got = 0;
+  int last_pct = -1;
+  while (got < (size_t)req->content_len) {
+    int r = httpd_req_recv(req, (char *)buf, sizeof(buf));
+    if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;
+    if (r <= 0) { Update.abort(); return httpd_resp_send(req, "recv error", HTTPD_RESP_USE_STRLEN); }
+    if (Update.write(buf, r) != (size_t)r) {
+      Update.abort();
+      return httpd_resp_send(req, Update.errorString(), HTTPD_RESP_USE_STRLEN);
+    }
+    got += r;
+    int pct = (int)(got * 100 / req->content_len);
+    if (pct / 5 != last_pct / 5) { last_pct = pct; ui_progress(pct, "固件升级中"); }
+  }
+  if (!Update.end(true)) {
+    ui_message("校验失败", Update.errorString());
+    return httpd_resp_send(req, Update.errorString(), HTTPD_RESP_USE_STRLEN);
+  }
+  ui_progress(100, "升级完成，重启");
+  httpd_resp_send(req, "OK", HTTPD_RESP_USE_STRLEN);
+  delay(800);
+  ESP.restart();
+  return ESP_OK;
+}
+
+static void http_begin() {
+  httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
+  cfg.max_uri_handlers = 8;
+  cfg.lru_purge_enable = true;
+  if (httpd_start(&s_http, &cfg) != ESP_OK) {
+    Serial.println("[HTTP] 启动失败");
+    return;
+  }
+  const httpd_uri_t uris[] = {
+      {"/",            HTTP_GET,  h_root,      nullptr},
+      {"/status.json", HTTP_GET,  h_status,    nullptr},
+      {"/ota",         HTTP_GET,  h_ota_page,  nullptr},
+      {"/update",      HTTP_POST, h_update,    nullptr},
+  };
+  for (auto &u : uris) httpd_register_uri_handler(s_http, &u);
+  Serial.println("[HTTP] http://" + cur_ip().toString() + "/");
+}
+
+static void wifi_begin() {
+  WiFi.mode(WIFI_STA);
+  WiFi.setHostname("esp32note");
+  if (strlen(WIFI_SSID) == 0) {
+    Serial.println("[WiFi] 无凭据，跳过 STA");
+    return;
+  }
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  ui_message("连接 Wi-Fi…", WIFI_SSID);
+  uint32_t t0 = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) {
+    delay(200);
+    Serial.print(".");
+  }
+  Serial.println();
+  if (WiFi.status() == WL_CONNECTED) {
+    s_wifi_ok = true;
+    Serial.printf("[WiFi] 已连接 %s\n", WiFi.localIP().toString().c_str());
+    if (MDNS.begin(MDNS_NAME)) MDNS.addService("http", "tcp", 80);
+    http_begin();
+  } else {
+    Serial.println("[WiFi] 连接失败，仅 BLE 模式");
+    WiFi.mode(WIFI_OFF);
+  }
+}
+
+// ---------------- 指令处理 ----------------
+static void do_show(int idx) {
+  notes_set_cursor(idx);
+  if (notes_count() == 0) ui_show_empty();
+  else ui_show_note(idx);
+}
+
+static void handle_cmd(const char *raw) {
+  Serial.printf("[CMD] %s\n", raw);
+  char buf[1600];
+  strncpy(buf, raw, sizeof(buf) - 1);
+  buf[sizeof(buf) - 1] = 0;
+
+  char *cmd = buf;
+  while (*cmd == ' ') cmd++;
+  char *arg = strchr(cmd, ' ');
+  if (arg) { *arg++ = 0; while (*arg == ' ') arg++; }
+
+  if (!strcmp(cmd, "V")) {
+    char o[48];
+    snprintf(o, sizeof(o), "OK V " FW_VERSION);
+    ble_send(o);
+  } else if (!strcmp(cmd, "T")) {
+    if (!arg) { ble_send("ERR NOARG"); return; }
+    const char *parts[NOTE_LINES + 1];
+    int n = 0;
+    char *p = arg;
+    parts[n++] = p;
+    while (n < NOTE_LINES + 1) {
+      char *bar = strchr(p, '|');
+      if (!bar) break;
+      *bar = 0;
+      p = bar + 1;
+      parts[n++] = p;
+    }
+    const char *title = parts[0];
+    const char *lines[NOTE_LINES];
+    for (int i = 1; i < n; i++) lines[i - 1] = parts[i];
+    int id = notes_add(title, lines, n - 1);
+    do_show(notes_cursor());
+    char o[64];
+    snprintf(o, sizeof(o), "OK T %d %d", id, notes_count());
+    ble_send(o);
+  } else if (!strcmp(cmd, "L")) {
+    char o[32];
+    snprintf(o, sizeof(o), "OK L %d", notes_count());
+    ble_send(o);
+    for (int i = 0; i < notes_count(); i++) {
+      Note *it = notes_get(i);
+      char line[NOTE_TITLE_BYTES + 24];
+      snprintf(line, sizeof(line), "ITEM %d %s", it->id, it->title);
+      ble_send(line);
+    }
+  } else if (!strcmp(cmd, "P")) {
+    int v = arg ? atoi(arg) : 0;
+    Note *it = notes_find(v);
+    if (it) do_show((int)(it - notes_get(0)));
+    else do_show(v - 1);
+    char o[32];
+    snprintf(o, sizeof(o), "OK P %d", notes_cursor() + 1);
+    ble_send(o);
+  } else if (!strcmp(cmd, "N")) {
+    do_show(notes_cursor() + 1);
+    char o[32];
+    snprintf(o, sizeof(o), "OK P %d", notes_cursor() + 1);
+    ble_send(o);
+  } else if (!strcmp(cmd, "R")) {
+    do_show(notes_cursor() - 1);
+    char o[32];
+    snprintf(o, sizeof(o), "OK P %d", notes_cursor() + 1);
+    ble_send(o);
+  } else if (!strcmp(cmd, "D")) {
+    int id = arg ? atoi(arg) : 0;
+    bool ok = notes_del(id);
+    do_show(notes_cursor());
+    ble_send(ok ? "OK D" : "ERR NOTFOUND");
+  } else if (!strcmp(cmd, "C")) {
+    notes_clear();
+    ui_show_empty();
+    ble_send("OK C");
+  } else if (!strcmp(cmd, "B")) {
+    int pct = arg ? atoi(arg) : 100;
+    ui_backlight(pct);
+    char o[32];
+    snprintf(o, sizeof(o), "OK B %d", ui_backlight_get());
+    ble_send(o);
+  } else if (!strcmp(cmd, "S")) {
+    int on = arg ? atoi(arg) : 1;
+    ledcWrite(0, on ? (1023 * ui_backlight_get()) / 100 : 0);
+    ble_send(on ? "OK S 1" : "OK S 0");
+  } else if (cmd[0]) {
+    ble_send("ERR UNKNOWN");
+  }
+}
+
+// ---------------- setup / loop ----------------
+void setup() {
+  Serial.begin(115200);
+  delay(300);
+  Serial.println("\n=== ESP32-NOTE 票据屏 " FW_VERSION " ===");
+
+  ui_begin();
+  cjk_init();
+  boolean ok = notes_begin();
+  Serial.printf("[NOTE] 存储 %s\n", ok ? "可用" : "不可用");
+
+  if (notes_count() > 0) ui_show_note(notes_cursor());
+  else ui_show_empty();
+
+  s_cmdq = xQueueCreate(6, sizeof(CmdLine));
+  ble_begin();
+  wifi_begin();
+
+  if (ui_ready()) {
+    if (notes_count() > 0) ui_show_note(notes_cursor());
+    else ui_show_empty();
+  }
+  Serial.printf("[SYS] heap=%u\n", (unsigned)ESP.getFreeHeap());
+}
+
+void loop() {
+  CmdLine cl;
+  while (s_cmdq && xQueueReceive(s_cmdq, &cl, 0) == pdTRUE) {
+    handle_cmd(cl.text);
+  }
+  static uint32_t last = 0;
+  if (millis() - last > 30000) {
+    last = millis();
+    Serial.printf("[SYS] up=%lus heap=%u ble=%d notes=%d\n",
+                  (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
+                  (int)s_ble_conn, notes_count());
+  }
+  delay(10);
+}

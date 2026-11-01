@@ -1,5 +1,25 @@
 # 更新记录
 
+## v0.3.0 — 2026-11-01 · 票据屏 M1（蓝牙推送 + 中文显示）
+
+**新固件 `firmware/notepad`**
+- BLE NUS 服务（`6E400001/2/3-B5A3-F393-E0A9-E50E24DCCA9E`）：手机写入指令，设备 notify 回执；实测 MTU 协商到 517
+- 指令集：`V` 版本 · `T` 新增条目 · `L` 列表 · `P/N/R` 切页 · `D` 删除 · `C` 清空 · `B` 亮度 · `S` 背光开关
+- 条目存 FFat（10 MB 分区），掉电不丢，最多保留 8 条
+- 16×16 中文字库（GB2312 全字集 7540 字，295 KB）编入 flash，按 UTF-8 码点二分查找
+- 320×240 UI：标题条 + 自动折行正文（每行最多 20 个汉字）+ 页码
+- 保留 HTTP OTA（`http://esp32note.local/ota`）与 `/status.json`
+
+**工具**
+- `scripts/gen_cjk_font.py`：从系统字体生成点阵字库二进制
+- `scripts/ble_test.py`：扫描 → 连接 → 下发 → 收回执，端到端自测
+- `scripts/setup_android.ps1`：Android 工具链一键安装（JDK17 + cmdline-tools + SDK + Gradle）
+- `scripts/flash.ps1`：新增 `-Project`；改为双槽写入 + 先清 otadata，避免 OTA 残留把板子启动到旧固件
+
+**实测**
+- BLE 全流程通过：`OK V 0.1.0` → `OK C` → `OK T 1 1` → `ITEM 1 高铁票 G106` → `OK P 1`
+- 128 字节含中文的 `T` 指令一次写入成功，条目落盘，屏幕显示，`/status.json` 中 `notes=1`
+
 ## v0.2.1 — 2026-11-01 · HTTP OTA 无线升级
 
 **固件 `firmware/webcam`**

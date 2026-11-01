@@ -3,11 +3,11 @@
 工作目录：`E:\ESP32开发`
 设备：**微雪 Waveshare ESP32-S3-LCD-2**（2 寸 IPS 240×320，ESP32-S3R8 + 8 MB PSRAM + 16 MB Flash，OV5640 摄像头，屏幕无触摸）
 
-**当前状态（v0.1.0，2026-10-31）**：网页图传已跑通并接入家庭 Wi-Fi。
-- 访问：`http://esp32cam.local/` 或 `http://<板子IP>/`（实测 `192.168.88.32`）
-- 架构：**80 端口控制面 / 8080 端口 MJPEG 数据面**，屏幕同步显示 IP 与运行状态
+**当前状态（v0.3.0，2026-11-01）**：网页图传（v0.2.1 含 HTTP OTA）与**票据屏 M1** 两套固件并行。
+- 网页图传：`http://esp32cam.local/`（实测 `192.168.88.32`），80 端口控制面 / 8080 端口 MJPEG 数据面
+- 票据屏：BLE `ESP32-NOTE`（NUS 服务）接收手机推送的票据文本，存 FFat 并显示在屏幕上；`http://esp32note.local/ota` 可无线升级
 - 摄像头 `PID=0x5640`（OV5640）实测通过；整片 Flash 已备份可回滚
-- 详见 [CHANGELOG.md](CHANGELOG.md) · [firmware/webcam](firmware/webcam/README.md) · [docs/](docs/)
+- 详见 [CHANGELOG.md](CHANGELOG.md) · [firmware/webcam](firmware/webcam/README.md) · [firmware/notepad](firmware/notepad/README.md) · [docs/](docs/)
 
 
 ## 目录结构

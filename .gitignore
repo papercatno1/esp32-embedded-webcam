@@ -35,6 +35,9 @@ dump/
 backup/
 firmware_backup/
 
+# ---- 本地工具链（Android SDK / JDK / Gradle，体积大，按 scripts/setup_android.ps1 重建） ----
+tools/
+
 # ---- 独立的日志仓库（自带 .git，独立提交/推送） ----
 /日志/
 
