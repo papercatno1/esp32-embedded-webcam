@@ -159,14 +159,18 @@ static int wrap_lines(const Note *n, char out[][NOTE_LINE_BYTES], int max_lines,
 }
 
 // 画 1-bit 位图：位=1 是白（纸），位=0 是黑（字）。按行把连续黑像素合并成一次 HLine
+static uint32_t s_img_ink = 0;
+uint32_t ui_last_img_ink() { return s_img_ink; }
+
 static void draw_bitmap_1bpp(Arduino_GFX *g, uint16_t w, uint16_t h, const uint8_t *bits) {
   const int stride = (w + 7) / 8;
-  g->startWrite();          // 整屏一次开写，否则每行都要重设窗口，慢好几倍
   for (int y = 0; y < h; y++) {
+    if ((y & 31) == 0) yield();
     const uint8_t *p = bits + (size_t)y * stride;
     int x0 = -1;
     for (int x = 0; x <= w; x++) {
       bool black = (x < w) && !((p[x >> 3] >> (7 - (x & 7))) & 1);
+      if (black) s_img_ink++;
       if (black && x0 < 0) x0 = x;
       else if (!black && x0 >= 0) {
         g->drawFastHLine(x0, y, x - x0, C_IMG_FG);
@@ -174,17 +178,29 @@ static void draw_bitmap_1bpp(Arduino_GFX *g, uint16_t w, uint16_t h, const uint8
       }
     }
   }
-  g->endWrite();
 }
 
 void ui_show_note(int idx) {
+  s_img_ink = 0;
   if (!s_gfx) return;
   if (idx < 0) idx = notes_cursor();
   const Note *n = notes_get(idx);
   if (!n) { ui_show_empty(); return; }
 
   // ---- 图片条目：整屏画图，页脚叠在下方（图片高度已限制在 FOOT_LINE 以内） ----
+  if (n->kind == NK_IMG && !n->img) {
+    clear();
+    s_gfx->fillRect(0, 0, 320, TITLE_H, C_BAR);
+    cjk_draw(s_gfx, 6, 5, "图片没了", C_TITLE, 246, CJK_L);
+    cjk_draw(s_gfx, 6, 80, "手机上重新发一次", C_DIM, -1, CJK_S);
+    ui_set_page(idx + 1, notes_count());
+    ui_footer_refresh();
+    return;
+  }
+  Serial.printf("[UI] show idx=%d kind=%d img=%p iw=%u ih=%u\n", idx, (int)n->kind,
+                (void *)n->img, (unsigned)n->iw, (unsigned)n->ih);
   if (n->kind == NK_IMG && n->img) {
+    Serial.printf("[UI] 图片分支 进入 heap=%u\n", (unsigned)ESP.getFreeHeap());
     s_gfx->fillScreen(C_IMG_BG);
     int ox = (320 - (int)n->iw) / 2;
     if (ox < 0) ox = 0;
@@ -192,6 +208,7 @@ void ui_show_note(int idx) {
     if (ox) s_gfx->writeFillRect(0, 0, ox, n->ih, C_IMG_BG);
     s_gfx->endWrite();
     draw_bitmap_1bpp(s_gfx, n->iw, n->ih, n->img);
+    Serial.printf("[UI] 画完 ink=%lu\n", (unsigned long)s_img_ink);
     s_gfx->fillRect(0, FOOT_LINE, 320, 240 - FOOT_LINE, C_BAR);
     ui_set_page(idx + 1, notes_count());
     ui_footer_refresh();

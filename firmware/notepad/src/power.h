@@ -30,6 +30,7 @@ void power_tick();
 
 // 取走一次待处理的甩动：-1 上一条，+1 下一条，0 没有
 int power_take_swipe();
+uint32_t power_flip_count();   // 翻牌动作累计次数（排查用）
 
 // 调试信息
 float    power_last_impulse();     // 最近一次敲击的加速度变化量（g）

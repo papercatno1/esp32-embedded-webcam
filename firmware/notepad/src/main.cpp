@@ -245,7 +245,7 @@ static esp_err_t h_status(httpd_req_t *req) {
            "{\"ver\":\"" FW_VERSION "\",\"up\":%lu,\"heap\":%u,\"wifi\":\"%s\","
            "\"ip\":\"%s\",\"rssi\":%d,\"ble\":%d,\"mtu\":%d,\"notes\":%d,\"cur\":%d,"
            "\"bl\":%d,\"ot\":%lu,\"imu\":%d,\"idle\":%lu,\"rx\":%lu,\"sw\":%lu,"
-           "\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d,\"sd\":%d,\"sdm\":%llu,\"ifs\":\"%s\",\"lc\":\"%s\",\"lr\":\"%s\",\"iw\":%d,\"ih\":%d,\"il\":%u}",
+           "\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d,\"sd\":%d,\"sdm\":%llu,\"ifs\":\"%s\",\"lc\":\"%s\",\"lr\":\"%s\",\"iw\":%d,\"ih\":%d,\"il\":%u,\"bk\":%u,\"fl\":%u}",
            (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            (WiFi.getMode() == WIFI_AP) ? "ap" : "sta",
            cur_ip().toString().c_str(),
@@ -260,7 +260,8 @@ static esp_err_t h_status(httpd_req_t *req) {
            power_last_swipe_deg(), power_last_swipe_axis(),
            power_last_mag(), power_peak_mag(), power_get_swipe_sign(),
            s_sd_ok ? 1 : 0, (unsigned long long)s_sd_mb, notes_img_fs_name(),
-           s_last_cmd, s_last_rep, s_img_w, s_img_h, (unsigned)s_img_len);
+           s_last_cmd, s_last_rep, s_img_w, s_img_h, (unsigned)s_img_len,
+           (unsigned)ui_last_img_ink(), (unsigned)power_flip_count());
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
@@ -351,6 +352,9 @@ static void wifi_begin() {
 }
 
 // ---------------- 指令处理 ----------------
+// 图片重绘必须在 loop() 里做：BLE 回调里整屏画图会饿死 NimBLE 主机任务导致重启
+static volatile bool s_need_show = false;
+
 static void do_show(int idx) {
   notes_set_cursor(idx);          // 内部按条数取模
   if (notes_count() == 0) {
@@ -463,7 +467,7 @@ static void handle_cmd(const char *raw) {
         snprintf(o, sizeof(o), "OK E %d %u %08X", id, (unsigned)s_img_len, (unsigned)hv);
         ble_send(o);             // ①先回执（此刻还没碰 flash，和 A 一样在 BLE 活跃期）
         notes_save();            // ②再落盘（写 flash 期间 BLE 会卡 1 秒以上）
-        do_show(notes_cursor()); // ③最后刷屏
+        s_need_show = true;   // ③整屏重绘放到 loop()（BLE 回调里画会卡死协议栈）
       }
       s_img_w = s_img_h = 0;
       s_img_len = 0;   // 缓冲区留着复用（下次 I 直接覆盖）
@@ -638,6 +642,10 @@ void loop() {
   power_tick();   // 超时熄屏 / 敲击唤醒 / 甩动检测
 
   // 甩一下翻页：往右下一条，往左上一条
+  if (s_need_show) {
+    s_need_show = false;
+    do_show(notes_cursor());
+  }
   int sw = power_take_swipe();
   if (sw != 0 && notes_count() > 1) {
     do_show(notes_cursor() + (sw > 0 ? 1 : -1));

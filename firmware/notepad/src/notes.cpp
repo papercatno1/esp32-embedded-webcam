@@ -270,8 +270,7 @@ int notes_add_img_rle(const char *title, uint16_t w, uint16_t h,
   if (w == 0 || w > IMG_MAX_W || h == 0 || h > IMG_MAX_H || !rle || rle_len < 2) return -1;
 
   size_t bytes = bmp_bytes(w, h);
-  uint8_t *bits = (uint8_t *)ps_malloc(bytes);
-  if (!bits) bits = (uint8_t *)malloc(bytes);
+  uint8_t *bits = (uint8_t *)malloc(bytes);   // 内部 RAM：8.5KB 一张，够用且稳定
   if (!bits) {
     Serial.println("[IMG] 位图内存不足");
     return -1;

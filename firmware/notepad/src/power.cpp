@@ -41,7 +41,8 @@ static float    s_deg_x = 0, s_deg_y = 0, s_deg_z = 0;   // 累计角度（度�
 static uint32_t s_last_swipe = 0;
 static float    s_last_deg = 0;
 static char     s_last_axis = '-';
-static int      s_pending = 0;       // -1 上一条 / +1 下一条
+static int      s_pending = 0;
+static uint32_t s_flip_count = 0;       // -1 上一条 / +1 下一条
 static uint32_t s_gesture_ms = 0;    // 本次手势起始时间（超时强制结算，避免一直"卡在甩动中"）
 static float    s_g_peak     = 0;    // 本次手势内的角速度峰值
 static uint32_t s_last_sample_ms = 0;  // 上一次采样时刻（用来算真实 dt）
@@ -102,6 +103,8 @@ uint32_t power_idle_ms() { return millis() - s_last_ms; }
 
 float power_last_impulse() { return s_last_impulse; }
 
+uint32_t power_flip_count() { return s_flip_count; }
+
 int power_take_swipe() {
   int v = s_pending;
   s_pending = 0;
@@ -156,7 +159,7 @@ static void swipe_finish() {
   // 熄屏时甩动：亮屏 + 同一次动作直接翻页（不用甩两下）
   if (s_blank) power_wake();
 
-  s_pending = dir;
+  // 甩动不再直接派发（翻页交给翻牌检测）
   s_last_ms = millis();
   s_motion_ms = millis();   // 手还在回位，重新等静止
 }
@@ -182,6 +185,53 @@ void power_tick() {
   if (dt <= 0 || dt > 0.2f) dt = 0.02f;   // 卡顿就按 20 ms 兜底，别把角度放大
   float ax, ay, az, gx, gy, gz;
   if (!qmi_read_motion(ax, ay, az, gx, gy, gz)) return;
+
+
+  // ---- 翻牌翻页（用户约定的标准动作）----
+  // 屏幕朝上平举 -> 像翻扑克牌那样翻 90°（屏幕朝身体右/左侧）-> 翻回水平。
+  // 判据用重力方向（加速度），跟陀螺仪积分无关，因此不看转速快慢，动作慢也认。
+  //   水平：|az| 大、平面内 ax/ay 都小
+  //   翻到竖直：平面内某一轴接近 1g
+  {
+    static bool ready = false, active = false;
+    static int  dir = 0, axis = 0;
+    static uint32_t t0 = 0, last_done = 0;
+    const float FLAT_AZ   = 0.80f;   // |az| 大于它 = 屏幕基本朝上/朝下
+    const float NEAR_FLAT = 0.45f;   // 平面内分量小于它 = 基本水平
+    const float TILT      = 0.70f;   // 平面内分量大于它 = 已经翻了 45° 以上
+    float ipx = fabsf(ax), ipy = fabsf(ay);
+    float inplane = fmaxf(ipx, ipy);
+    bool flat = fabsf(az) > FLAT_AZ;
+
+    if (!active) {
+      if (flat && inplane < NEAR_FLAT) {
+        ready = true;
+      } else if (ready && inplane > TILT) {
+        active = true;
+        t0 = now;
+        axis = (ipx > ipy) ? 0 : 1;
+        float v = (axis == 0) ? ax : ay;
+        dir = (v > 0) ? 1 : -1;
+        ready = false;
+        Serial.printf("[PWR] 翻牌起手 轴=%c dir=%+d a=(%.2f/%.2f/%.2f)\n",
+                      axis == 0 ? 'X' : 'Y', dir, ax, ay, az);
+      }
+    } else if (flat && inplane < NEAR_FLAT) {
+      active = false;
+      if ((now - t0) > 120 && (now - last_done) > 800) {
+        last_done = now;
+        s_pending = dir;
+        s_flip_count++;
+        Serial.printf("[PWR] 翻牌完成 轴=%c dir=%+d -> %s (共 %lu 次)\n",
+                      axis == 0 ? 'X' : 'Y', dir,
+                      dir > 0 ? "下一条" : "上一条", (unsigned long)s_flip_count);
+        if (s_blank) power_wake();
+      }
+    } else if ((now - t0) > 3000) {
+      active = false;   // 一直歪着不回来，放弃这次
+      Serial.println("[PWR] 翻牌超时，放弃");
+    }
+  }
 
   // ---- 敲击（只在熄屏时判，避免正常拿动就亮） ----
   if (s_blank) {

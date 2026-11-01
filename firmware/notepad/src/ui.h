@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 void ui_begin();
+uint32_t ui_last_img_ink();   // 上一张图画了多少个黑点（0=没画出来）
 void ui_bus_recover();   // SD 探测后恢复 LCD 总线
 bool ui_ready();
 
