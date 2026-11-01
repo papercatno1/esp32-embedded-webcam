@@ -60,11 +60,25 @@ static bool s_img_on_sd = false;
 static fs::FS &img_fs() { return s_img_on_sd ? (fs::FS &)SD : (fs::FS &)FFat; }
 
 void notes_refresh_img_fs() {
-  s_img_on_sd = (SD.cardType() != CARD_NONE);
+  bool ok = (SD.cardType() != CARD_NONE);
+  if (ok) {                                   // 挂得上不代表写得了（exFAT 卡在 FatFs 下常常只读）
+    File t = SD.open("/_wtest", "w");
+    if (t) { t.print("x"); t.close(); SD.remove("/_wtest"); }
+    else ok = false;
+  }
+  s_img_on_sd = ok;
   Serial.printf("[IMG] 图片存放：%s\n", s_img_on_sd ? "TF 卡" : "内部 FFat");
 }
 
 const char *notes_img_fs_name() { return s_img_on_sd ? "sd" : "ffat"; }
+
+uint32_t notes_img_index_size() {
+  File f = img_fs().open(kImgIdx, "r");
+  if (!f) return 0;
+  uint32_t n = f.size();
+  f.close();
+  return n;
+}
 
 static void img_path(int id, char *buf, size_t cap) {
   snprintf(buf, cap, "/i%d.rle", id);

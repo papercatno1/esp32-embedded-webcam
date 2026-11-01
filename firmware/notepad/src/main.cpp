@@ -245,7 +245,7 @@ static esp_err_t h_status(httpd_req_t *req) {
            "{\"ver\":\"" FW_VERSION "\",\"up\":%lu,\"heap\":%u,\"wifi\":\"%s\","
            "\"ip\":\"%s\",\"rssi\":%d,\"ble\":%d,\"mtu\":%d,\"notes\":%d,\"cur\":%d,"
            "\"bl\":%d,\"ot\":%lu,\"imu\":%d,\"idle\":%lu,\"rx\":%lu,\"sw\":%lu,"
-           "\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d,\"sd\":%d,\"sdm\":%llu,\"ifs\":\"%s\",\"lc\":\"%s\",\"lr\":\"%s\",\"iw\":%d,\"ih\":%d,\"il\":%u,\"bk\":%u,\"fl\":%u}",
+           "\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d,\"sd\":%d,\"sdm\":%llu,\"ifs\":\"%s\",\"lc\":\"%s\",\"lr\":\"%s\",\"iw\":%d,\"ih\":%d,\"il\":%u,\"isz\":%u,\"bk\":%u,\"fl\":%u}",
            (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            (WiFi.getMode() == WIFI_AP) ? "ap" : "sta",
            cur_ip().toString().c_str(),
@@ -261,6 +261,7 @@ static esp_err_t h_status(httpd_req_t *req) {
            power_last_mag(), power_peak_mag(), power_get_swipe_sign(),
            s_sd_ok ? 1 : 0, (unsigned long long)s_sd_mb, notes_img_fs_name(),
            s_last_cmd, s_last_rep, s_img_w, s_img_h, (unsigned)s_img_len,
+           (unsigned)notes_img_index_size(),
            (unsigned)ui_last_img_ink(), (unsigned)power_flip_count());
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -448,12 +449,6 @@ static void handle_cmd(const char *raw) {
       }
     }
   } else if (!strcmp(cmd, "E")) {
-    // 第一次收图前先认一下 TF 卡（探卡会抢走 SCK/MOSI，探完必须恢复总线）
-    if (!s_sd_probed) {
-      s_sd_probed = true;
-      if (sd_probe()) { notes_refresh_img_fs(); }
-      ui_bus_recover();
-    }
     if (!s_img_w || !s_img_len) {
       ble_send("ERR NOIMG");
     } else {
@@ -567,7 +562,11 @@ static void handle_cmd(const char *raw) {
       int t = SD.cardType();
       const char *tn = (t == CARD_MMC) ? "MMC" : (t == CARD_SD) ? "SD"
                      : (t == CARD_SDHC) ? "SDHC" : "?";
-      snprintf(o, sizeof(o), "OK M %s %llu", tn, (unsigned long long)s_sd_mb);
+      // 顺便测一下能不能写：有些出厂 exFAT 卡在 FatFs 下挂得上但写不进去
+      bool wr = false;
+      File tf = SD.open("/_t.txt", "w");
+      if (tf) { tf.print("x"); tf.close(); wr = SD.exists("/_t.txt"); SD.remove("/_t.txt"); }
+      snprintf(o, sizeof(o), "OK M %s %llu w=%d", tn, (unsigned long long)s_sd_mb, wr ? 1 : 0);
       notes_refresh_img_fs();
     }
     s_sd_probed = true;
@@ -594,6 +593,8 @@ void setup() {
   delay(300);
   Serial.println("\n=== ESP32-NOTE 票据屏 " FW_VERSION " ===");
 
+  // TF 卡必须在 LCD 之前挂：SD 与 LCD 共用 SCK(39)/MOSI(38)，
+  // 谁后初始化谁把总线拿走 —— LCD 先初始化就会被 SD 弄成花屏。
   ui_begin();
   cjk_init();
   boolean ok = notes_begin();
