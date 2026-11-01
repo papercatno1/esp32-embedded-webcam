@@ -75,6 +75,7 @@ class MainActivity : androidx.activity.ComponentActivity() {
 
         // 甩动翻页方向反了就点这个：K t 让设备自己取反并保存到 NVS
         findViewById<Button>(R.id.btnFlipSign).setOnClickListener { send("K t") }
+        findViewById<Button>(R.id.btnReconnect).setOnClickListener { ble.reconnect() }
 
         findViewById<Button>(R.id.btnImage).setOnClickListener { pickImage.launch("image/*") }
 
@@ -227,7 +228,8 @@ class MainActivity : androidx.activity.ComponentActivity() {
 
     private fun updateStatus() {
         val link = when {
-            ble.ready -> "已连接 · MTU ${ble.mtu}"
+            ble.ready && ble.notifyReady -> "已连接 · MTU ${ble.mtu} · 回执正常"
+            ble.ready -> "已连接 · MTU ${ble.mtu} · 回执未订阅"
             ble.connected -> "已连接，等服务就绪…"
             else -> "未连接 · 点「扫描连接」"
         }

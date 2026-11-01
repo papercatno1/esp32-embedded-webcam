@@ -244,7 +244,7 @@ static esp_err_t h_status(httpd_req_t *req) {
            "{\"ver\":\"" FW_VERSION "\",\"up\":%lu,\"heap\":%u,\"wifi\":\"%s\","
            "\"ip\":\"%s\",\"rssi\":%d,\"ble\":%d,\"mtu\":%d,\"notes\":%d,\"cur\":%d,"
            "\"bl\":%d,\"ot\":%lu,\"imu\":%d,\"idle\":%lu,\"rx\":%lu,\"sw\":%lu,"
-           "\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d,\"sd\":%d,\"sdm\":%llu,\"lc\":\"%s\",\"lr\":\"%s\",\"iw\":%d,\"ih\":%d,\"il\":%u}",
+           "\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d,\"sd\":%d,\"sdm\":%llu,\"ifs\":\"%s\",\"lc\":\"%s\",\"lr\":\"%s\",\"iw\":%d,\"ih\":%d,\"il\":%u}",
            (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            (WiFi.getMode() == WIFI_AP) ? "ap" : "sta",
            cur_ip().toString().c_str(),
@@ -258,7 +258,7 @@ static esp_err_t h_status(httpd_req_t *req) {
            (unsigned long)power_swipe_count(),
            power_last_swipe_deg(), power_last_swipe_axis(),
            power_last_mag(), power_peak_mag(), power_get_swipe_sign(),
-           s_sd_ok ? 1 : 0, (unsigned long long)s_sd_mb,
+           s_sd_ok ? 1 : 0, (unsigned long long)s_sd_mb, notes_img_fs_name(),
            s_last_cmd, s_last_rep, s_img_w, s_img_h, (unsigned)s_img_len);
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
@@ -557,6 +557,7 @@ static void handle_cmd(const char *raw) {
       const char *tn = (t == CARD_MMC) ? "MMC" : (t == CARD_SD) ? "SD"
                      : (t == CARD_SDHC) ? "SDHC" : "?";
       snprintf(o, sizeof(o), "OK M %s %llu", tn, (unsigned long long)s_sd_mb);
+      notes_refresh_img_fs();
     }
     ble_send(o);
     if (notes_count() > 0) ui_show_note(notes_cursor()); else ui_show_empty();
@@ -588,6 +589,7 @@ void setup() {
   qmi_begin();          // 板上 QMI8658：敲击唤醒 + 甩动翻页
   power_begin(60000);   // 60 秒无交互熄屏；0 = 常亮
   sd_probe();           // 开机就探一次 TF 卡（status.json 里能看到）
+  notes_refresh_img_fs();
   ui_set_timeout_s(power_timeout() / 1000);
   ui_set_link(false);
 

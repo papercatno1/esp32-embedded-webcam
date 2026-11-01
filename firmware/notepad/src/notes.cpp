@@ -1,5 +1,6 @@
 #include "notes.h"
 #include <FFat.h>
+#include <SD.h>
 #include <string.h>
 
 static Note s_notes[NOTES_MAX];
@@ -52,6 +53,19 @@ static size_t rle_encode(const uint8_t *bits, size_t n, uint8_t *out, size_t cap
   return o;
 }
 
+
+// 图片能落 SD 卡就落卡（29 GB），没有卡才用内部 FFat（10 MB）
+static bool s_img_on_sd = false;
+
+static fs::FS &img_fs() { return s_img_on_sd ? (fs::FS &)SD : (fs::FS &)FFat; }
+
+void notes_refresh_img_fs() {
+  s_img_on_sd = (SD.cardType() != CARD_NONE);
+  Serial.printf("[IMG] 图片存放：%s\n", s_img_on_sd ? "TF 卡" : "内部 FFat");
+}
+
+const char *notes_img_fs_name() { return s_img_on_sd ? "sd" : "ffat"; }
+
 static void img_path(int id, char *buf, size_t cap) {
   snprintf(buf, cap, "/i%d.rle", id);
 }
@@ -67,7 +81,7 @@ static void drop_note_at(int i) {
   if (it->img) {
     char path[24];
     img_path(it->id, path, sizeof(path));
-    FFat.remove(path);
+    img_fs().remove(path);
     free(it->img);
     it->img = nullptr;
   }
@@ -78,7 +92,7 @@ static void drop_note_at(int i) {
 // ---------------- 落盘 ----------------
 static void save_img_index() {
   if (!s_mounted) return;
-  File f = FFat.open(kImgIdx, "w");
+  File f = img_fs().open(kImgIdx, "w");
   if (!f) return;
   for (int i = 0; i < s_n; i++) {
     Note *it = &s_notes[i];
@@ -90,7 +104,7 @@ static void save_img_index() {
     if (rlen) {
       char path[24];
       img_path(it->id, path, sizeof(path));
-      File g = FFat.open(path, "w");
+      File g = img_fs().open(path, "w");
       if (g) {
         uint8_t hdr[4] = { (uint8_t)(it->iw & 0xFF), (uint8_t)(it->iw >> 8),
                            (uint8_t)(it->ih & 0xFF), (uint8_t)(it->ih >> 8) };
@@ -128,7 +142,7 @@ bool notes_save() {
 
 // ---------------- 载入 ----------------
 static void load_images() {
-  File f = FFat.open(kImgIdx, "r");
+  File f = img_fs().open(kImgIdx, "r");
   if (!f) return;
   while (f.available()) {
     String line = f.readStringUntil('\n');
@@ -141,7 +155,7 @@ static void load_images() {
 
     char path[24];
     img_path(id, path, sizeof(path));
-    File g = FFat.open(path, "r");
+    File g = img_fs().open(path, "r");
     if (!g) continue;
     uint8_t hdr[4] = {0};
     if (g.read(hdr, 4) != 4) { g.close(); continue; }
@@ -306,14 +320,14 @@ void notes_clear() {
     if (s_notes[i].img) {
       char path[24];
       img_path(s_notes[i].id, path, sizeof(path));
-      FFat.remove(path);
+      img_fs().remove(path);
       free(s_notes[i].img);
       s_notes[i].img = nullptr;
     }
   }
   s_n = 0;
   s_cursor = 0;
-  if (s_mounted) FFat.remove(kImgIdx);
+  if (s_mounted) img_fs().remove(kImgIdx);
   notes_save();
 }
 

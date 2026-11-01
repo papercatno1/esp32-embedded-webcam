@@ -122,6 +122,13 @@
             android:text="甩动统计" />
 
         <Button
+            android:id="@+id/btnReconnect"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="重连" />
+
+        <Button
             android:id="@+id/btnFlipSign"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
