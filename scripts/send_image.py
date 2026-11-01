@@ -27,8 +27,33 @@ TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
 CCC = "00002902-0000-1000-8000-00805f9b34fb"
 
 
-def to_bitmap(path, threshold=128, dither=False, invert=False):
+def crop_aspect(im, where="center"):
+    """按 320:212 的比例裁一块（手机长截图不裁就只剩一条 98px 宽的细条，字全糊）"""
+    if where == "none":
+        return im
+    W, H = im.size
+    target = IMG_MAX_W / float(IMG_MAX_H)      # 1.509
+    if W / float(H) > target:                  # 太宽：裁左右
+        nw = int(round(H * target))
+        x0 = (W - nw) // 2
+        return im.crop((x0, 0, x0 + nw, H))
+    nh = int(round(W / target))                # 太高：裁上下
+    if where == "top":
+        y0 = 0
+    elif where == "bottom":
+        y0 = H - nh
+    else:
+        y0 = (H - nh) // 2
+    return im.crop((0, y0, W, y0 + nh))
+
+
+def to_bitmap(path, threshold=128, dither=False, invert=False, crop="center", preview="", box=""):
     im = Image.open(path).convert("L")
+    if box:
+        x0, y0, x1, y1 = [int(v) for v in box.split(",")]
+        im = im.crop((x0, y0, x1, y1))
+    else:
+        im = crop_aspect(im, crop)
     im.thumbnail((IMG_MAX_W, IMG_MAX_H), Image.LANCZOS)
     if dither:
         im = im.convert("1")                      # 有序抖动，照片更好看
@@ -37,6 +62,8 @@ def to_bitmap(path, threshold=128, dither=False, invert=False):
         bits = im.point(lambda v: 255 if v >= threshold else 0)
     if invert:
         bits = ImageOps.invert(bits)
+    if preview:
+        bits.save(preview)
     w, h = bits.size
     stride = (w + 7) // 8
     buf = bytearray(stride * h)
@@ -72,7 +99,7 @@ def rle_encode(bits):
 async def run(args):
     from bleak import BleakClient, BleakScanner
 
-    w, h, bits = to_bitmap(args.image, args.threshold, args.dither, args.invert)
+    w, h, bits = to_bitmap(args.image, args.threshold, args.dither, args.invert, args.crop, args.preview, args.box)
     rle = rle_encode(bits)
     b64 = base64.b64encode(rle).decode()
     print(f"图片 {w}x{h}  位图 {len(bits)} B  RLE {len(rle)} B  base64 {len(b64)} 字符")
@@ -148,6 +175,11 @@ def main():
     ap.add_argument("--invert", action="store_true", help="黑白反相")
     ap.add_argument("--name", default="ESP32-NOTE")
     ap.add_argument("--scan", type=float, default=8.0)
+    ap.add_argument("--crop", default="center",
+                    choices=["center", "top", "bottom", "none"],
+                    help="先把图按 320:212 裁一块再缩放（手机长截图必须裁，否则字小到看不清）")
+    ap.add_argument("--box", default="", help="手动裁切 x0,y0,x1,y1（原图像素），给了就不按比例裁")
+    ap.add_argument("--preview", default="", help="把处理结果另存成 PNG 便于先看效果")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     raise SystemExit(asyncio.run(run(args)))
