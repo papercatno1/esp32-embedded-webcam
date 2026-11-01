@@ -1,5 +1,21 @@
 # 更新记录
 
+## v0.4.0 — 2026-11-01 · 安卓 App（票据屏手机端）
+
+**新增 `android/`：票据屏 App 0.1.0**
+- Kotlin + 平台 API，**零第三方依赖**，APK 809 KB，minSdk 26 / targetSdk 34
+- 扫描（按设备名 `ESP32-NOTE` + NUS 服务 UUID 双过滤，12 秒自动停扫）→ 连接 → 协商 MTU(517) → 订阅回执
+- 输入框多行文本：第一行当标题，其余行当正文，拼成 `T 标题|行1|…` 一次发完；支持「粘贴」剪贴板
+- 按 `max(20, mtu-3)` 分片顺序写（`onCharacteristicWrite` 驱动 + 25 ms 间隔），1000 字节上限
+- 按钮：查版本 `V` / 看列表 `L` / 清空设备 `C`；日志区实时显示 `->` 发出与 `<-` 回执
+
+**工具**
+- `scripts/setup_android.ps1`：JDK17 + Android SDK(platform-tools, android-34, build-tools 34.0.0) + Gradle 8.7 一键装到 `tools\`
+- `scripts/build_apk.ps1`：构建并复制到 `dist\票据屏-debug.apk`
+
+**坑**
+- 工程在中文路径下 AGP 直接拒构建 → `gradle.properties` 加 `android.overridePathCheck=true`
+
 ## v0.3.0 — 2026-11-01 · 票据屏 M1（蓝牙推送 + 中文显示）
 
 **新固件 `firmware/notepad`**

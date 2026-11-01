@@ -3,11 +3,12 @@
 工作目录：`E:\ESP32开发`
 设备：**微雪 Waveshare ESP32-S3-LCD-2**（2 寸 IPS 240×320，ESP32-S3R8 + 8 MB PSRAM + 16 MB Flash，OV5640 摄像头，屏幕无触摸）
 
-**当前状态（v0.3.0，2026-11-01）**：网页图传（v0.2.1 含 HTTP OTA）与**票据屏 M1** 两套固件并行。
+**当前状态（v0.4.0，2026-11-01）**：网页图传（v0.2.1 含 HTTP OTA）、**票据屏 M1** 固件与**安卓 App 0.1.0**。
 - 网页图传：`http://esp32cam.local/`（实测 `192.168.88.32`），80 端口控制面 / 8080 端口 MJPEG 数据面
 - 票据屏：BLE `ESP32-NOTE`（NUS 服务）接收手机推送的票据文本，存 FFat 并显示在屏幕上；`http://esp32note.local/ota` 可无线升级
+- 安卓 App「票据屏」：扫描连接 → 粘贴文本 → 发送，见 [docs/安卓App.md](docs/安卓App.md)
 - 摄像头 `PID=0x5640`（OV5640）实测通过；整片 Flash 已备份可回滚
-- 详见 [CHANGELOG.md](CHANGELOG.md) · [firmware/webcam](firmware/webcam/README.md) · [firmware/notepad](firmware/notepad/README.md) · [docs/](docs/)
+- 详见 [CHANGELOG.md](CHANGELOG.md) · [firmware/webcam](firmware/webcam/README.md) · [firmware/notepad](firmware/notepad/README.md) · [android/](docs/安卓App.md) · [docs/](docs/)
 
 
 ## 目录结构
@@ -19,6 +20,11 @@ E:\ESP32开发
 │  ├─ partitions_16MB.csv   与出厂固件同布局
 │  ├─ README.md             编译/烧录/接口说明/排查表
 │  └─ src\                  main.cpp / camera_pins.h / wifi_config.h / www.h
+├─ firmware\notepad\     ▶ 票据屏工程（BLE + 中文点阵字库 + FFat + OTA）
+│  ├─ data\cjk16.bin        16×16 字库（7540 字，295 KB，编入 flash）
+│  └─ src\                  main.cpp / cjk.* / notes.* / ui.* / wifi_config.h
+├─ android\              ▶ 手机端 App（Kotlin，零第三方依赖，见 docs/安卓App.md）
+│  └─ app\src\main\        MainActivity.kt / BleLink.kt / activity_main.xml
 ├─ 设备图片\            设备照片（板子正面 / 屏幕 / 摄像头 / 装机后实拍）
 │  ├─ 板子正面照.jpg        装机前
 │  ├─ 板子屏幕与接口.jpg     屏幕模块（FPC 排线）
@@ -35,11 +41,21 @@ E:\ESP32开发
 ├─ scripts\
 │  ├─ chip_info.ps1     一键探测板子（端口 / 芯片 / Flash / 分区）
 │  ├─ serial_monitor.py 串口监视 + 复位抓启动日志（带自动重连）
+│  ├─ flash.ps1         编译 + 双槽烧录 + 跟串口（-Project webcam|notepad）
 │  ├─ cam_test.ps1      图传自测：/status + /capture + /shoot
+│  ├─ verify_cam.py     图传端到端自测（状态/单帧/拍照/流与控制面并发）
+│  ├─ ota.ps1           无线升级：编译 + POST /update + 等待上线 + 版本比对
+│  ├─ ble_test.py       票据屏自测：扫描 → 连接 → 下发 → 收回执
+│  ├─ gen_cjk_font.py   中文点阵字库生成（系统字体 → cjk16.bin）
+│  ├─ setup_android.ps1 Android 工具链一键安装（装到 tools\）
+│  ├─ build_apk.ps1     构建安卓 App 并复制到 dist\
 │  ├─ fw_inspect.py     固件离线分析（分区表 / app 描述符 / 关键词串）
 │  ├─ webget.py         本地抓网页转文本（绕开本机 fake-ip 导致的 fetch 限制）
-│  └─ push_log.ps1      收工一键：提交并推送开发日志仓库
+│  ├─ push_log.ps1      收工一键：提交并推送开发日志仓库
+│  └─ push_project.ps1  收工一键：提交并推送本工程仓库
 ├─ 日志\                开发日志（**独立 git 仓库**，自己的远端，已 gitignore）
+├─ tools\               本地工具链 JDK17 / Android SDK / Gradle（已 gitignore）
+├─ dist\                构建产物（APK 等，已 gitignore）
 ├─ dump\                Flash 备份（已 gitignore，不入库）
 ├─ logs\                串口日志、抓到的快照（已 gitignore）
 └─ .venv\               Python 虚拟环境（esptool + pyserial + platformio，已 gitignore）
@@ -68,6 +84,30 @@ Wi-Fi 凭据放 `firmware/webcam/src/wifi_secrets.h`，**该文件不入库**。
 
 连上热点后一条命令自测：`.\scripts\cam_test.ps1`
 
+
+## 票据屏（蓝牙推送 + 中文显示）
+
+手机 App 把文本通过 BLE（NUS 服务）发给板子，板子存进 FFat 并显示在 320×240 屏上；最多 8 条，可翻页/删除。
+
+```powershell
+.\scripts\flash.ps1 -Project notepad   # 烧票据屏固件
+.\scripts\ble_test.py                  # 电脑侧端到端自测（需要 BLE 适配器）
+.\scripts\setup_android.ps1            # 首次：装安卓工具链（tools\，约 13 分钟）
+.\scripts\build_apk.ps1                # 构建 App → dist\票据屏-debug.apk
+```
+
+设备名 `ESP32-NOTE`；指令以 `\n` 结尾，回执走 notify：
+
+| 指令 | 说明 |
+| --- | --- |
+| `V` | 版本 |
+| `T 标题\|行1\|行2…` | 新增条目并切到该条 |
+| `L` | 列出全部条目 |
+| `P <id>` / `N` / `R` | 切到指定条 / 下一条 / 上一条 |
+| `D <id>` / `C` | 删除一条 / 全部清空 |
+| `B <0-100>` / `S <0\|1>` | 亮度 / 背光开关 |
+
+App 使用说明见 [docs/安卓App.md](docs/安卓App.md)，字库细节见 [docs/中文点阵字库.md](docs/中文点阵字库.md)。
 
 ## 开发日志（独立仓库）
 
@@ -140,9 +180,15 @@ cd E:\ESP32开发
 - [x] 工具链方案规划（[docs/工具链方案.md](docs/工具链方案.md)）
 - [x] 排针定义 + 屏驱动 IC 确认（ST7789，[docs/引脚定义.md](docs/引脚定义.md)）
 - [x] **完整引脚表**（官方原理图 V2 核对：LCD / 摄像头 / I²C / SD / ADC 全部到手）
-- [ ] 摄像头功能验证（跑一次 `esp_camera_init`，看能否出图）
-- [ ] 装 PlatformIO（M0：blink + 串口闭环）
-- [ ] 开发方案定稿 → 建项目仓库
+- [x] 摄像头验证（`esp_camera_init` 通过，PID `0x5640`）
+- [x] 网页图传 v0.1.0（页面 / MJPEG / 拍照 / 状态 / 屏幕 IP 显示）
+- [x] 断链根治（lwIP 10 socket 上限 → 8080 独立数据面）· v0.2.0
+- [x] HTTP OTA 无线升级（`/ota` + `POST /update`）· v0.2.1
+- [x] 票据屏 M1：BLE NUS + 中文点阵 + FFat + 翻页 · v0.3.0
+- [x] 安卓 App 0.1.0：扫描连接 + 粘贴 + 发送 · v0.4.0
+- [ ] 票据屏 M2：熄屏 + IMU 敲击唤醒
+- [ ] 票据屏 M3：截图裁剪上传（手机上框选 → 二值图 → BLE 分包）
+- [ ] 票据屏 M4：OCR 自动裁票面
 
 ## 出厂 demo 的界面真相（从固件字符串表挖出来的）
 
