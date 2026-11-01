@@ -27,6 +27,7 @@ class CropView @JvmOverloads constructor(
     private var tx = 0f
     private var ty = 0f
     private var minScale = 1f
+    private var pages = 1              // 1 / 2 / 4：把取景框拉高 n 倍，发 n 页，字就放大 n 倍
 
     private val frame = RectF()
     private val matrix = Matrix()
@@ -62,13 +63,25 @@ class CropView @JvmOverloads constructor(
         invalidate()
     }
 
+    fun setPages(n: Int) {
+        if (pages == n) return
+        pages = n
+        layoutFrame(width, height)
+        fitImage()
+    }
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         super.onSizeChanged(w, h, oldw, oldh)
-        val aspect = 320f / 212f
+        layoutFrame(w, h)
+    }
+
+    private fun layoutFrame(w: Int, h: Int) {
+        val aspect = 320f / (212f * pages)
         var fw = w * 0.94f
         var fh = fw / aspect
-        if (fh > h * 0.72f) {
-            fh = h * 0.72f
+        val maxH = h * 0.72f
+        if (fh > maxH) {
+            fh = maxH
             fw = fh * aspect
         }
         val left = (w - fw) / 2f
@@ -142,7 +155,7 @@ class CropView @JvmOverloads constructor(
         canvas.drawRect(frame, linePaint)
     }
 
-    /** 取景框里那一块 -> 320x212（设备屏幕尺寸） */
+    /** 取景框里那一块 -> 320x212；拆两页时是 320x424（调用方再切成两半） */
     fun cropToScreen(): Bitmap? {
         val b = bmp ?: return null
         val r = shownRect()
@@ -157,7 +170,7 @@ class CropView @JvmOverloads constructor(
         } catch (e: Exception) {
             return null
         }
-        return Bitmap.createScaledBitmap(cut, 320, 212, true)
+        return Bitmap.createScaledBitmap(cut, 320, 212 * pages, true)
     }
 
 }

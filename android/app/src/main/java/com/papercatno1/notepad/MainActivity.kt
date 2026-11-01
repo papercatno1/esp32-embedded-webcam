@@ -160,15 +160,17 @@ class MainActivity : androidx.activity.ComponentActivity() {
             return@registerForActivityResult
         }
         val d = res.data ?: return@registerForActivityResult
-        val w = d.getIntExtra("w", 0)
-        val h = d.getIntExtra("h", 0)
-        val rleLen = d.getIntExtra("rle", 0)
-        val b64 = d.getStringExtra("b64") ?: ""
-        if (w <= 0 || h <= 0 || b64.isEmpty()) {
+        val n = d.getIntExtra("count", 0)
+        if (n <= 0) {
             toast("没拿到裁剪结果")
             return@registerForActivityResult
         }
-        sendImageB64(w, h, rleLen, b64)
+        for (i in 0 until n) {
+            val b64 = d.getStringExtra("b64_$i") ?: continue
+            val len = d.getIntExtra("len_$i", 0)
+            if (b64.isEmpty()) continue
+            sendImageB64(320, 212, len, b64)
+        }
     }
 
     /** 发一张已经裁好、压成 1-bit 的图：I/A.../E */

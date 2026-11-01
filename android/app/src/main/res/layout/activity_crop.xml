@@ -28,6 +28,30 @@
         android:orientation="horizontal"
         android:padding="10dp">
 
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="字的浓淡（太白往右拉）"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp" />
+
+            <SeekBar
+                android:id="@+id/seekBias"
+                android:layout_width="150dp"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <Button
+            android:id="@+id/btnCropPages"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="页数：1" />
+
         <Button
             android:id="@+id/btnCropCancel"
             android:layout_width="0dp"

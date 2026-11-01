@@ -28,27 +28,47 @@ class CropActivity : ComponentActivity() {
             return
         }
         view.setBitmap(bmp)
-        info.text = "拖动图片、双指缩放；绿框里就是屏幕上显示的样子"
+        info.text = "拖动/双指缩放取景；绿框里就是屏幕上显示的样子"
 
         findViewById<Button>(R.id.btnCropCancel).setOnClickListener {
             setResult(RESULT_CANCELED)
             finish()
         }
 
+        val biasSeek = findViewById<android.widget.SeekBar>(R.id.seekBias)
+        val pageBtn = findViewById<Button>(R.id.btnCropPages)
+        biasSeek.progress = 10
+        val pageList = intArrayOf(1, 2, 4)
+        var pageIdx = 0
+        pageBtn.setOnClickListener {
+            pageIdx = (pageIdx + 1) % pageList.size
+            val n = pageList[pageIdx]
+            view.setPages(n)
+            pageBtn.text = "页数：$n"
+            info.text = when (n) {
+                1 -> "一页：整块信息一屏放下，小字可能糊"
+                2 -> "两页：框变高，字放大 2 倍，翻一下看下一页"
+                else -> "四页：字放大 4 倍，最清楚；框会更细长"
+            }
+        }
+
         findViewById<Button>(R.id.btnCropOk).setOnClickListener {
-            val small = view.cropToScreen()
-            if (small == null) {
+            val cut = view.cropToScreen()
+            if (cut == null) {
                 Toast.makeText(this, "取景框没准备好", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            val bits = ImgCodec.toBits(small)
-            val rle = ImgCodec.rleEncode(bits)
-            val b64 = Base64.encodeToString(rle, Base64.NO_WRAP)
+            val bias = biasSeek.progress
+            val nPage = maxOf(1, cut.height / 212)
+            val tiles = ArrayList<Bitmap>()
+            for (k in 0 until nPage) tiles.add(Bitmap.createBitmap(cut, 0, k * 212, 320, 212))
             val out = Intent()
-            out.putExtra("w", small.width)
-            out.putExtra("h", small.height)
-            out.putExtra("rle", rle.size)
-            out.putExtra("b64", b64)
+            out.putExtra("count", tiles.size)
+            tiles.forEachIndexed { i, pg ->
+                val rle = ImgCodec.rleEncode(ImgCodec.toBits(pg, bias))
+                out.putExtra("b64_$i", Base64.encodeToString(rle, Base64.NO_WRAP))
+                out.putExtra("len_$i", rle.size)
+            }
             setResult(RESULT_OK, out)
             finish()
         }
