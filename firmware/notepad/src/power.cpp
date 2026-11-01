@@ -114,12 +114,11 @@ static void swipe_finish() {
   Serial.printf("[PWR] 甩动 轴=%c 转=%.1f度 -> %s\n", axis, val,
                 dir > 0 ? "下一条" : "上一条");
 
-  if (s_blank) {
-    power_wake();      // 熄屏时先亮，不翻页
-  } else {
-    s_pending = dir;
-    s_last_ms = millis();
-  }
+  // 熄屏时甩动：亮屏 + 同一次动作直接翻页（不用甩两下）
+  if (s_blank) power_wake();
+
+  s_pending = dir;
+  s_last_ms = millis();
 }
 
 void power_tick() {
