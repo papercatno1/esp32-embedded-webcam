@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.result.contract.ActivityResultContracts
+import android.content.Intent
 import android.os.Bundle
 import android.widget.Button
 import android.widget.EditText
@@ -146,7 +147,45 @@ class MainActivity : androidx.activity.ComponentActivity() {
     // ---------------- 图片：选图 -> 缩到 320x212 -> 二值 -> RLE -> base64 -> I/A/E ----------------
 
     private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) sendImage(uri)
+        if (uri == null) return@registerForActivityResult
+        val it = Intent(this, CropActivity::class.java)
+        it.data = uri
+        cropImage.launch(it)
+    }
+
+    /** 裁剪界面回传：宽度、高度、RLE 字节数、base64 正文 */
+    private val cropImage = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        if (res.resultCode != RESULT_OK) {
+            appendLog("取消发送图片")
+            return@registerForActivityResult
+        }
+        val d = res.data ?: return@registerForActivityResult
+        val w = d.getIntExtra("w", 0)
+        val h = d.getIntExtra("h", 0)
+        val rleLen = d.getIntExtra("rle", 0)
+        val b64 = d.getStringExtra("b64") ?: ""
+        if (w <= 0 || h <= 0 || b64.isEmpty()) {
+            toast("没拿到裁剪结果")
+            return@registerForActivityResult
+        }
+        sendImageB64(w, h, rleLen, b64)
+    }
+
+    /** 发一张已经裁好、压成 1-bit 的图：I/A.../E */
+    private fun sendImageB64(w: Int, h: Int, rleLen: Int, b64: String) {
+        if (!ble.ready) {
+            toast(if (ble.connected) "还在等服务就绪，稍等下" else "还没连上设备")
+            return
+        }
+        appendLog("图片 ${w}x$h  RLE ${rleLen} B  base64 ${b64.length} 字符")
+        val chunk = 380                                  // 4 的倍数，保证逐行 base64 字节对齐
+        ble.send("I $w $h")
+        var i = 0
+        while (i < b64.length) {
+            ble.send("A " + b64.substring(i, minOf(i + chunk, b64.length)))
+            i += chunk
+        }
+        ble.send("E")
     }
 
     /** 把位图转成 1-bit（1=白 0=黑），行按字节对齐、MSB 在前 */

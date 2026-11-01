@@ -36,6 +36,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".CropActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Material.NoActionBar" />
     </application>
 
 </manifest>
