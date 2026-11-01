@@ -1,6 +1,7 @@
 #include "power.h"
 #include "ui.h"
 #include "qmi8658.h"
+#include <Preferences.h>
 
 // ---------------- 打击/甩动判定参数 ----------------
 #define TAP_THRESHOLD  0.75f   // 相邻两次采样的加速度变化量阈值（g，三轴绝对值之和）
@@ -16,7 +17,7 @@
 #define SWIPE_PEAK_FALLBACK_DPS 600.0f
 #define SWIPE_MIN_DEG_FALLBACK  15.0f
 // 方向：+1 / -1 可以在运行时用 K 指令切换（默认 1）
-static int s_dir_sign = 1;
+static int s_dir_sign = -1;   // -1: 顺时针/拧紧 = 下一条（默认手感）
 
 static uint32_t s_timeout_ms = 60000;
 static uint32_t s_last_ms    = 0;
@@ -47,8 +48,16 @@ void power_begin(uint32_t idle_ms) {
   s_blank = false;
   s_pending = 0;
   ui_screen_on(true);
-  Serial.printf("[PWR] 熄屏超时 %lus（0=常亮），IMU %s\n",
-                (unsigned long)(s_timeout_ms / 1000), qmi_ok() ? "可用" : "不可用");
+  // 翻页方向符号存在 NVS 里，重启后仍生效
+  Preferences p;
+  if (p.begin("noteapp", true)) {
+    int8_t v = p.getChar("swsign", (int8_t)s_dir_sign);
+    p.end();
+    s_dir_sign = (v >= 0) ? 1 : -1;
+  }
+  Serial.printf("[PWR] 熄屏超时 %lus（0=常亮），IMU %s，翻页符号 %d\n",
+                (unsigned long)(s_timeout_ms / 1000), qmi_ok() ? "可用" : "不可用",
+                s_dir_sign);
 }
 
 void power_set_timeout(uint32_t ms) {
@@ -182,7 +191,7 @@ void power_tick() {
     static uint32_t last_log = 0;
     if (now - last_log > 300) {
       last_log = now;
-      Serial.printf("[IMU] ω=%.0f dps (%.0f/%.0f/%.0f)\n", mag, gx, gy, gz);
+      Serial.printf("[IMU] ω=%.0f dps (%.0f/%.0f/%.0f) a=(%.2f/%.2f/%.2f)g\n", mag, gx, gy, gz, ax, ay, az);
     }
   }
   if (!s_in_gesture) {
@@ -190,6 +199,8 @@ void power_tick() {
       s_in_gesture = true;
       s_gesture_ms = now;
       s_g_peak = mag;
+      Serial.printf("[PWR] 起手 g=(%+.0f/%+.0f/%+.0f) a=(%+.2f/%+.2f/%+.2f)\n",
+                    gx, gy, gz, ax, ay, az);
       s_deg_x = gx * dt;
       s_deg_y = gy * dt;
       s_deg_z = gz * dt;
@@ -208,7 +219,12 @@ void power_tick() {
 
 void power_set_swipe_sign(int sign) {
   s_dir_sign = (sign >= 0) ? 1 : -1;
-  Serial.printf("[PWR] 翻页方向符号 = %d\n", s_dir_sign);
+  Preferences p;
+  if (p.begin("noteapp", false)) {
+    p.putChar("swsign", (int8_t)s_dir_sign);
+    p.end();
+  }
+  Serial.printf("[PWR] 翻页方向符号 = %d（已保存）\n", s_dir_sign);
 }
 
 int power_get_swipe_sign() { return s_dir_sign; }

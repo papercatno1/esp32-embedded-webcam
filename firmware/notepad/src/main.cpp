@@ -162,12 +162,12 @@ static esp_err_t h_root(httpd_req_t *req) {
 }
 
 static esp_err_t h_status(httpd_req_t *req) {
-  char buf[448];
+  char buf[480];
   snprintf(buf, sizeof(buf),
            "{\"ver\":\"" FW_VERSION "\",\"up\":%lu,\"heap\":%u,\"wifi\":\"%s\","
            "\"ip\":\"%s\",\"rssi\":%d,\"ble\":%d,\"mtu\":%d,\"notes\":%d,\"cur\":%d,"
            "\"bl\":%d,\"ot\":%lu,\"imu\":%d,\"idle\":%lu,\"rx\":%lu,\"sw\":%lu,"
-           "\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f}",
+           "\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d}",
            (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            (WiFi.getMode() == WIFI_AP) ? "ap" : "sta",
            cur_ip().toString().c_str(),
@@ -180,7 +180,7 @@ static esp_err_t h_status(httpd_req_t *req) {
            (unsigned long)s_cmd_rx,
            (unsigned long)power_swipe_count(),
            power_last_swipe_deg(), power_last_swipe_axis(),
-           power_last_mag(), power_peak_mag());
+           power_last_mag(), power_peak_mag(), power_get_swipe_sign());
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
@@ -399,8 +399,11 @@ static void handle_cmd(const char *raw) {
              power_get_swipe_sign());
     ble_send(o);
   } else if (!strcmp(cmd, "K")) {
-    // 翻页方向：K 1 / K -1（不用重烧固件就能反号）；不带参数就查询
-    if (arg) power_set_swipe_sign(atoi(arg));
+    // 翻页方向：K 1 / K -1；K t = 翻转；不带参数就查询
+    if (arg) {
+      if (arg[0] == 't' || arg[0] == 'T') power_set_swipe_sign(-power_get_swipe_sign());
+      else power_set_swipe_sign(atoi(arg));
+    }
     char o[32];
     snprintf(o, sizeof(o), "OK K %d", power_get_swipe_sign());
     ble_send(o);
@@ -443,6 +446,21 @@ void loop() {
   CmdLine cl;
   while (s_cmdq && xQueueReceive(s_cmdq, &cl, 0) == pdTRUE) {
     handle_cmd(cl.text);
+  }
+
+  // 串口也能下指令（调试用：BLE 被手机占着时照样能发 K/Q/N 等）
+  static char s_ser[128];
+  static size_t s_ser_n = 0;
+  while (Serial.available()) {
+    int c = Serial.read();
+    if (c == '\r') continue;
+    if (c == '\n') {
+      s_ser[s_ser_n] = 0;
+      if (s_ser_n) handle_cmd(s_ser);
+      s_ser_n = 0;
+    } else if (s_ser_n < sizeof(s_ser) - 1) {
+      s_ser[s_ser_n++] = (char)c;
+    }
   }
 
   power_tick();   // 超时熄屏 / 敲击唤醒 / 甩动检测

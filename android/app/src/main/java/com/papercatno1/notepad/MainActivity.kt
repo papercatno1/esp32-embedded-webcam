@@ -72,6 +72,9 @@ class MainActivity : Activity() {
 
         findViewById<Button>(R.id.btnSwipeStat).setOnClickListener { send("Q") }
 
+        // 甩动翻页方向反了就点这个：K t 让设备自己取反并保存到 NVS
+        findViewById<Button>(R.id.btnFlipSign).setOnClickListener { send("K t") }
+
         updateStatus()
     }
 
