@@ -7,12 +7,16 @@
 #define TAP_COOLDOWN   500     // 两次敲击最小间隔（ms）
 #define SAMPLE_MS      25      // 采样周期（ms）
 
-#define SWIPE_START_DPS  80.0f  // 角速度超过这个值开始记录一次甩动（原 120，实测手甩峰值偏低）
-#define SWIPE_END_DPS    30.0f  // 低于这个值算这次甩动结束
-#define SWIPE_MIN_DEG    30.0f  // 累计转过的角度超过多少度才算数
-#define SWIPE_COOLDOWN   700    // 两次甩动最小间隔（ms）
-// 方向：+1 = 顺时针（多数人理解的"往右甩"）；方向反了就改成 -1
-#define SWIPE_DIR_SIGN   1
+#define SWIPE_START_DPS  70.0f  // 角速度超过这个值开始记录一次甩动（量程放开到 ±2048 后读数更真，阈值相应上调）
+#define SWIPE_END_DPS    25.0f  // 低于这个值算这次甩动结束
+#define SWIPE_MIN_DEG    40.0f  // 累计转过的角度超过多少度才算数
+#define SWIPE_COOLDOWN   450    // 两次甩动最小间隔（ms）
+// 快速一挥时超过 START 的采样点很少，累计角度偏小；用峰值兜底：
+// 峰值够大 + 至少转了 SWIPE_MIN_DEG_FALLBACK 度，也认
+#define SWIPE_PEAK_FALLBACK_DPS 600.0f
+#define SWIPE_MIN_DEG_FALLBACK  15.0f
+// 方向：+1 / -1 可以在运行时用 K 指令切换（默认 1）
+static int s_dir_sign = 1;
 
 static uint32_t s_timeout_ms = 60000;
 static uint32_t s_last_ms    = 0;
@@ -31,6 +35,8 @@ static float    s_last_deg = 0;
 static char     s_last_axis = '-';
 static int      s_pending = 0;       // -1 上一条 / +1 下一条
 static uint32_t s_gesture_ms = 0;    // 本次手势起始时间（超时强制结算，避免一直"卡在甩动中"）
+static float    s_g_peak     = 0;    // 本次手势内的角速度峰值
+static uint32_t s_last_sample_ms = 0;  // 上一次采样时刻（用来算真实 dt）
 static uint32_t s_swipe_count = 0;
 static float    s_last_mag  = 0;     // 最近一次合成角速度（dps）
 static float    s_peak_mag  = 0;     // 上电以来峰值（dps）
@@ -102,17 +108,26 @@ static void swipe_finish() {
 
   s_deg_x = s_deg_y = s_deg_z = 0;
 
-  if (fabsf(val) < SWIPE_MIN_DEG) return;
-  if (millis() - s_last_swipe < SWIPE_COOLDOWN) return;
+  // 判定：转够了就算；快速一挥累计角度偏小时，用峰值兜底
+  bool enough = fabsf(val) >= SWIPE_MIN_DEG;
+  bool fast   = s_g_peak >= SWIPE_PEAK_FALLBACK_DPS && fabsf(val) >= SWIPE_MIN_DEG_FALLBACK;
+  if (!enough && !fast) {
+    Serial.printf("[PWR] 甩动不足 %.1f度 峰值%.0f -> 忽略\n", val, s_g_peak);
+    return;
+  }
+  if (millis() - s_last_swipe < SWIPE_COOLDOWN) {
+    Serial.printf("[PWR] 冷却中 %.1f度 -> 忽略\n", val);
+    return;
+  }
 
   s_last_swipe = millis();
   s_last_deg = val;
   s_last_axis = axis;
   s_swipe_count++;
 
-  int dir = (val > 0) ? SWIPE_DIR_SIGN : -SWIPE_DIR_SIGN;
-  Serial.printf("[PWR] 甩动 轴=%c 转=%.1f度 -> %s\n", axis, val,
-                dir > 0 ? "下一条" : "上一条");
+  int dir = (val > 0) ? s_dir_sign : -s_dir_sign;
+  Serial.printf("[PWR] 甩动 轴=%c 转=%.1f度 峰值=%.0f -> %s%s\n", axis, val, s_g_peak,
+                dir > 0 ? "下一条" : "上一条", enough ? "" : "（峰值兜底）");
 
   // 熄屏时甩动：亮屏 + 同一次动作直接翻页（不用甩两下）
   if (s_blank) power_wake();
@@ -135,6 +150,11 @@ void power_tick() {
   if (now - last_sample < SAMPLE_MS) return;
   last_sample = now;
 
+  // 用真实间隔积分角度：loop 里有 BLE/HTTP/刷屏，实际周期会抖，
+  // 固定按 25 ms 算会把角度算小（甩得越快差得越多）
+  float dt = (now - s_last_sample_ms) / 1000.0f;
+  s_last_sample_ms = now;
+  if (dt <= 0 || dt > 0.2f) dt = 0.02f;   // 卡顿就按 20 ms 兜底，别把角度放大
   float ax, ay, az, gx, gy, gz;
   if (!qmi_read_motion(ax, ay, az, gx, gy, gz)) return;
 
@@ -169,17 +189,26 @@ void power_tick() {
     if (mag > SWIPE_START_DPS) {
       s_in_gesture = true;
       s_gesture_ms = now;
-      s_deg_x = gx * (SAMPLE_MS / 1000.0f);
-      s_deg_y = gy * (SAMPLE_MS / 1000.0f);
-      s_deg_z = gz * (SAMPLE_MS / 1000.0f);
+      s_g_peak = mag;
+      s_deg_x = gx * dt;
+      s_deg_y = gy * dt;
+      s_deg_z = gz * dt;
     }
   } else {
-    s_deg_x += gx * (SAMPLE_MS / 1000.0f);
-    s_deg_y += gy * (SAMPLE_MS / 1000.0f);
-    s_deg_z += gz * (SAMPLE_MS / 1000.0f);
+    if (mag > s_g_peak) s_g_peak = mag;
+    s_deg_x += gx * dt;
+    s_deg_y += gy * dt;
+    s_deg_z += gz * dt;
     if (mag < SWIPE_END_DPS || (now - s_gesture_ms) > 1500) {
       s_in_gesture = false;
       swipe_finish();
     }
   }
 }
+
+void power_set_swipe_sign(int sign) {
+  s_dir_sign = (sign >= 0) ? 1 : -1;
+  Serial.printf("[PWR] 翻页方向符号 = %d\n", s_dir_sign);
+}
+
+int power_get_swipe_sign() { return s_dir_sign; }

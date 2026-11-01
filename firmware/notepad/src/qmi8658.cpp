@@ -26,12 +26,14 @@
 
 // CTRL2: aFS=±4g(0b0001) aODR=125Hz(0b0011)
 #define CTRL2_VAL 0x13
-// CTRL3: gFS=±512dps(0b0101) gODR=125Hz(0b0011)
-#define CTRL3_VAL 0x53
+// CTRL3: gFS=±2048dps(0b0111) gODR=125Hz(0b0011)
+// 原来用 ±512dps 量程，手甩一下就顶到 ±500（raw 打满 32767），
+// 被截断的那部分角度直接丢掉，所以"甩一大下只记到 41 度"
+#define CTRL3_VAL 0x73
 // ±4g 时 32768 LSB = 4g
 #define LSB_PER_G 8192.0f
 // ±512dps 时灵敏度 65.5 LSB/dps
-#define LSB_PER_DPS 65.5f
+#define LSB_PER_DPS 16.4f   // ±2048dps 量程：2048/…/16.4 LSB per dps
 
 static uint8_t s_addr = 0;
 static bool    s_ok = false;
@@ -77,7 +79,7 @@ bool qmi_begin() {
   delay(2);
   wr(REG_CTRL2, CTRL2_VAL);   // 加速度 ±4g / 125Hz
   delay(2);
-  wr(REG_CTRL3, CTRL3_VAL);   // 陀螺仪 ±512dps / 125Hz
+  wr(REG_CTRL3, CTRL3_VAL);   // 陀螺仪 ±2048dps / 125Hz
   delay(2);
   wr(REG_CTRL7, 0x03);        // 加速度 + 陀螺仪都开
   delay(30);

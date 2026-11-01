@@ -391,11 +391,18 @@ static void handle_cmd(const char *raw) {
   } else if (!strcmp(cmd, "Q")) {
     // 甩动统计：次数 / 最近角度 / 轴 + 实时与峰值角速度（判断传感器看不看得见你甩）
     char o[128];
-    snprintf(o, sizeof(o), "OK Q %lu %.1f %c | now %.0f peak %.0f | %d/%d",
+    snprintf(o, sizeof(o), "OK Q %lu %.1f %c | now %.0f peak %.0f | %d/%d | k%d",
              (unsigned long)power_swipe_count(),
              power_last_swipe_deg(), power_last_swipe_axis(),
              power_last_mag(), power_peak_mag(),
-             notes_count() > 0 ? notes_cursor() + 1 : 0, notes_count());
+             notes_count() > 0 ? notes_cursor() + 1 : 0, notes_count(),
+             power_get_swipe_sign());
+    ble_send(o);
+  } else if (!strcmp(cmd, "K")) {
+    // 翻页方向：K 1 / K -1（不用重烧固件就能反号）；不带参数就查询
+    if (arg) power_set_swipe_sign(atoi(arg));
+    char o[32];
+    snprintf(o, sizeof(o), "OK K %d", power_get_swipe_sign());
     ble_send(o);
   } else if (cmd[0]) {
     ble_send("ERR UNKNOWN");

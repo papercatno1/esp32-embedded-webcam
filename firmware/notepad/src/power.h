@@ -36,6 +36,8 @@ float    power_last_impulse();     // 最近一次敲击的加速度变化量（
 float    power_last_swipe_deg();   // 最近一次甩动累计转角（度）
 char     power_last_swipe_axis();  // 'x' / 'y' / 'z'
 uint32_t power_swipe_count();      // 甩动次数
+void power_set_swipe_sign(int sign);   // 甩动翻页方向：1 / -1
+int  power_get_swipe_sign();
 
 // 陀螺仪实时读数，用来判断"传感器到底看不看得见你在甩"
 float    power_last_mag();         // 最近一次采样的合成角速度（dps）
