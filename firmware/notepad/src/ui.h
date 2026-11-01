@@ -1,5 +1,5 @@
 #pragma once
-// 320x240 横屏 UI：标题条 + 正文（16px 点阵，自动折行，最多 10 行）
+// 320x240 横屏 UI：标题条(24px) + 正文(24px 点阵，自动折行) + 页脚(16px)
 #include <Arduino.h>
 
 void ui_begin();
@@ -11,5 +11,9 @@ void ui_show_empty();
 void ui_message(const char *l1, const char *l2 = nullptr, const char *l3 = nullptr);
 void ui_progress(int pct, const char *title);   // OTA/联网进度
 
-void ui_backlight(int pct);   // 0-100
+void ui_backlight(int pct);   // 5-100
 int  ui_backlight_get();
+
+// 背光开关（熄屏用，不改动设定亮度）
+void ui_screen_on(bool on);
+bool ui_screen_is_on();

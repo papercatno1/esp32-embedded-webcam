@@ -6,9 +6,18 @@
 
 #define LCD_BL_PIN 1
 
+// 布局（320x240 横屏）
+#define TITLE_H    34      // 标题条高度（24px 字）
+#define BODY_Y     44      // 正文起始 y
+#define BODY_LINES 6       // 正文行数（行距 28）
+#define BODY_LH    28
+#define FOOT_LINE  212     // 页脚分隔线
+#define FOOT_Y     216     // 页脚文字 y（16px 字）
+
 static Arduino_DataBus *s_bus = nullptr;
 static Arduino_GFX     *s_gfx = nullptr;
-static int s_bl_pct = 100;
+static int  s_bl_pct = 100;
+static bool s_screen_on = true;
 
 // 配色
 #define C_BG      0x0000
@@ -18,10 +27,15 @@ static int s_bl_pct = 100;
 #define C_DIM     0x8410
 #define C_ACCENT  0x07E0
 
+static void bl_apply() {
+  ledcWrite(0, s_screen_on ? (1023 * s_bl_pct) / 100 : 0);
+}
+
 void ui_begin() {
   ledcSetup(0, 5000, 10);
   ledcAttachPin(LCD_BL_PIN, 0);
-  ledcWrite(0, 1023);
+  s_screen_on = true;
+  bl_apply();
 
   s_bus = new Arduino_ESP32SPI(42 /*DC*/, 45 /*CS*/, 39 /*SCK*/, 38 /*MOSI*/,
                                GFX_NOT_DEFINED /*MISO*/);
@@ -40,10 +54,17 @@ void ui_backlight(int pct) {
   if (pct < 5) pct = 5;
   if (pct > 100) pct = 100;
   s_bl_pct = pct;
-  ledcWrite(0, (1023 * pct) / 100);
+  bl_apply();
 }
 
 int ui_backlight_get() { return s_bl_pct; }
+
+void ui_screen_on(bool on) {
+  s_screen_on = on;
+  bl_apply();
+}
+
+bool ui_screen_is_on() { return s_screen_on; }
 
 static void clear() {
   if (!s_gfx) return;
@@ -63,8 +84,8 @@ static int wrap_lines(const Note *n, char out[][NOTE_LINE_BYTES], int max_lines,
         uint32_t cp = 0;
         int used = cjk_next(&q, &cp);
         if (!used) break;
-        int a = cjk_advance(cp);
-        if (a == 0) a = 8;
+        int a = cjk_advance(CJK_L, cp);
+        if (a == 0) a = 24;
         if (*q == ' ' || *q == '|') last_break = q;
         if (w + a > max_px) { q -= used; break; }
         w += a;
@@ -99,57 +120,63 @@ void ui_show_note(int idx) {
 
   clear();
   // 标题条
-  s_gfx->fillRect(0, 0, 320, 28, C_BAR);
-  cjk_draw(s_gfx, 8, 6, n->title[0] ? n->title : "(无标题)", C_TITLE, 250);
+  s_gfx->fillRect(0, 0, 320, TITLE_H, C_BAR);
+  cjk_draw(s_gfx, 6, 5, n->title[0] ? n->title : "(无标题)", C_TITLE, 246, CJK_L);
 
-  // 右上角 序号/总数
+  // 右上角 序号/总数（小字）
   char page[16];
   snprintf(page, sizeof(page), "%d/%d", idx + 1, notes_count());
-  int pw = cjk_width(page);
-  cjk_draw(s_gfx, 312 - pw, 6, page, C_ACCENT);
+  int pw = cjk_width(page, CJK_S);
+  cjk_draw(s_gfx, 314 - pw, 9, page, C_ACCENT, -1, CJK_S);
 
   // 正文
-  static char wrapped[16][NOTE_LINE_BYTES];
-  int lines = wrap_lines(n, wrapped, 10, 308);
-  int y = 36;
+  static char wrapped[BODY_LINES][NOTE_LINE_BYTES];
+  int lines = wrap_lines(n, wrapped, BODY_LINES, 306);
+  int y = BODY_Y;
   for (int i = 0; i < lines; i++) {
-    cjk_draw(s_gfx, 8, y, wrapped[i], C_TEXT, 316);
-    y += 20;
+    cjk_draw(s_gfx, 8, y, wrapped[i], C_TEXT, 312, CJK_L);
+    y += BODY_LH;
   }
 
-  // 底部提示
-  s_gfx->drawFastHLine(0, 236, 320, C_BAR);
-  cjk_draw(s_gfx, 8, 240 - 2, "BLE: ESP32-NOTE", C_DIM, 316);
+  // 页脚
+  s_gfx->drawFastHLine(0, FOOT_LINE, 320, C_BAR);
+  cjk_draw(s_gfx, 8, FOOT_Y, "BLE: ESP32-NOTE", C_DIM, 200, CJK_S);
+
+  // 右下角：条目数 + 熄屏提示
+  snprintf(page, sizeof(page), "%d 条", notes_count());
+  pw = cjk_width(page, CJK_S);
+  cjk_draw(s_gfx, 312 - pw, FOOT_Y, page, C_DIM, -1, CJK_S);
 }
 
 void ui_show_empty() {
   if (!s_gfx) return;
   clear();
-  s_gfx->fillRect(0, 0, 320, 28, C_BAR);
-  cjk_draw(s_gfx, 8, 6, "ESP32-NOTE 票据屏", C_TITLE, 316);
-  cjk_draw(s_gfx, 40, 96, "等待手机推送", C_TEXT);
-  cjk_draw(s_gfx, 40, 124, "用蓝牙发送票据信息", C_DIM);
-  s_gfx->drawFastHLine(0, 236, 320, C_BAR);
-  cjk_draw(s_gfx, 8, 238, "BLE: ESP32-NOTE", C_DIM, 316);
+  s_gfx->fillRect(0, 0, 320, TITLE_H, C_BAR);
+  cjk_draw(s_gfx, 6, 5, "ESP32-NOTE 票据屏", C_TITLE, 312, CJK_L);
+  cjk_draw(s_gfx, 24, 82, "等待手机推送", C_TEXT, -1, CJK_L);
+  cjk_draw(s_gfx, 24, 118, "用蓝牙发送票据信息", C_DIM, -1, CJK_L);
+  s_gfx->drawFastHLine(0, FOOT_LINE, 320, C_BAR);
+  cjk_draw(s_gfx, 8, FOOT_Y, "BLE: ESP32-NOTE", C_DIM, 200, CJK_S);
+  cjk_draw(s_gfx, 8, FOOT_Y, "", C_DIM, -1, CJK_S);
 }
 
 void ui_message(const char *l1, const char *l2, const char *l3) {
   if (!s_gfx) return;
   clear();
   int y = 70;
-  if (l1) { cjk_draw(s_gfx, 16, y, l1, C_TEXT, 300); y += 26; }
-  if (l2) { cjk_draw(s_gfx, 16, y, l2, C_DIM, 300); y += 26; }
-  if (l3) { cjk_draw(s_gfx, 16, y, l3, C_ACCENT, 300); }
+  if (l1) { cjk_draw(s_gfx, 16, y, l1, C_TEXT, 300, CJK_L); y += 32; }
+  if (l2) { cjk_draw(s_gfx, 16, y, l2, C_DIM, 300, CJK_S); y += 24; }
+  if (l3) { cjk_draw(s_gfx, 16, y, l3, C_ACCENT, 300, CJK_S); }
 }
 
 void ui_progress(int pct, const char *title) {
   if (!s_gfx) return;
   clear();
-  cjk_draw(s_gfx, 16, 60, title ? title : "升级中", C_TEXT, 300);
+  cjk_draw(s_gfx, 16, 52, title ? title : "升级中", C_TEXT, 300, CJK_L);
   int w = 300 * (pct < 0 ? 0 : (pct > 100 ? 100 : pct)) / 100;
-  s_gfx->drawRect(10, 100, 300, 22, C_DIM);
-  s_gfx->fillRect(11, 101, w, 20, C_ACCENT);
+  s_gfx->drawRect(10, 100, 300, 24, C_DIM);
+  s_gfx->fillRect(11, 101, w, 22, C_ACCENT);
   char b[16];
   snprintf(b, sizeof(b), "%d%%", pct);
-  cjk_draw(s_gfx, 140, 140, b, C_TEXT);
+  cjk_draw(s_gfx, 140, 140, b, C_TEXT, -1, CJK_L);
 }

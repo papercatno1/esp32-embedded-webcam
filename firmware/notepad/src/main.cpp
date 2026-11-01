@@ -15,8 +15,12 @@
 //   D <id>                 -> OK D <id>
 //   C                      -> OK C
 //   B <0-100>              -> OK B <pct>
-//   S <0|1>                -> OK S <0|1>
+//   S <0|1>                -> OK S <0|1>        手动熄屏/点亮
+//   O <秒>                 -> OK O <秒>         自动熄屏超时（0=常亮，默认 60）
+//   A                      -> OK A <x> <y> <z>  读加速度（g，调试用）
 //   其它                   -> ERR UNKNOWN
+//
+// M2：一段时间无交互自动熄屏（背光关），敲一下板子（QMI8658 加速度突变）点亮。
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -29,8 +33,10 @@
 #include "cjk.h"
 #include "notes.h"
 #include "ui.h"
+#include "qmi8658.h"
+#include "power.h"
 
-#define FW_VERSION "0.1.0"
+#define FW_VERSION "0.2.0"
 
 // ---------------- BLE ----------------
 #define NUS_SVC "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -151,15 +157,20 @@ static esp_err_t h_root(httpd_req_t *req) {
 }
 
 static esp_err_t h_status(httpd_req_t *req) {
-  char buf[320];
+  char buf[384];
   snprintf(buf, sizeof(buf),
            "{\"ver\":\"" FW_VERSION "\",\"up\":%lu,\"heap\":%u,\"wifi\":\"%s\","
-           "\"ip\":\"%s\",\"rssi\":%d,\"ble\":%d,\"mtu\":%d,\"notes\":%d,\"cur\":%d}",
+           "\"ip\":\"%s\",\"rssi\":%d,\"ble\":%d,\"mtu\":%d,\"notes\":%d,\"cur\":%d,"
+           "\"bl\":%d,\"ot\":%lu,\"imu\":%d,\"idle\":%lu}",
            (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            (WiFi.getMode() == WIFI_AP) ? "ap" : "sta",
            cur_ip().toString().c_str(),
            (WiFi.getMode() == WIFI_AP) ? 0 : WiFi.RSSI(),
-           (int)s_ble_conn, s_ble_mtu, notes_count(), notes_cursor());
+           (int)s_ble_conn, s_ble_mtu, notes_count(), notes_cursor(),
+           power_is_blank() ? 0 : 1,
+           (unsigned long)(power_timeout() / 1000),
+           qmi_ok() ? 1 : 0,
+           (unsigned long)(power_idle_ms() / 1000));
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
@@ -258,6 +269,7 @@ static void do_show(int idx) {
 
 static void handle_cmd(const char *raw) {
   Serial.printf("[CMD] %s\n", raw);
+  power_activity();          // 任何指令都算一次交互（顺手点亮屏幕）
   char buf[1600];
   strncpy(buf, raw, sizeof(buf) - 1);
   buf[sizeof(buf) - 1] = 0;
@@ -337,8 +349,22 @@ static void handle_cmd(const char *raw) {
     ble_send(o);
   } else if (!strcmp(cmd, "S")) {
     int on = arg ? atoi(arg) : 1;
-    ledcWrite(0, on ? (1023 * ui_backlight_get()) / 100 : 0);
+    if (on) power_wake(); else power_blank();
     ble_send(on ? "OK S 1" : "OK S 0");
+  } else if (!strcmp(cmd, "O")) {
+    uint32_t sec = arg ? (uint32_t)atoi(arg) : 60;
+    if (sec > 86400) sec = 86400;
+    if (sec == 0) power_activity();
+    power_set_timeout(sec * 1000UL);
+    char o[32];
+    snprintf(o, sizeof(o), "OK O %lu", (unsigned long)(power_timeout() / 1000));
+    ble_send(o);
+  } else if (!strcmp(cmd, "A")) {
+    float ax = 0, ay = 0, az = 0;
+    char o[64];
+    if (qmi_read_accel(ax, ay, az)) snprintf(o, sizeof(o), "OK A %.2f %.2f %.2f", ax, ay, az);
+    else snprintf(o, sizeof(o), "ERR IMU");
+    ble_send(o);
   } else if (cmd[0]) {
     ble_send("ERR UNKNOWN");
   }
@@ -354,6 +380,9 @@ void setup() {
   cjk_init();
   boolean ok = notes_begin();
   Serial.printf("[NOTE] 存储 %s\n", ok ? "可用" : "不可用");
+
+  qmi_begin();          // 板上 QMI8658，用来做敲击唤醒
+  power_begin(60000);   // 60 秒无交互熄屏；0 = 常亮
 
   if (notes_count() > 0) ui_show_note(notes_cursor());
   else ui_show_empty();
@@ -374,12 +403,16 @@ void loop() {
   while (s_cmdq && xQueueReceive(s_cmdq, &cl, 0) == pdTRUE) {
     handle_cmd(cl.text);
   }
+
+  power_tick();   // 超时熄屏 / 敲击唤醒
+
   static uint32_t last = 0;
   if (millis() - last > 30000) {
     last = millis();
-    Serial.printf("[SYS] up=%lus heap=%u ble=%d notes=%d\n",
+    Serial.printf("[SYS] up=%lus heap=%u ble=%d notes=%d bl=%d imu=%d idle=%lus\n",
                   (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
-                  (int)s_ble_conn, notes_count());
+                  (int)s_ble_conn, notes_count(), power_is_blank() ? 0 : 1,
+                  qmi_ok() ? 1 : 0, (unsigned long)(power_idle_ms() / 1000));
   }
   delay(10);
 }

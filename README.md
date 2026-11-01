@@ -3,9 +3,9 @@
 工作目录：`E:\ESP32开发`
 设备：**微雪 Waveshare ESP32-S3-LCD-2**（2 寸 IPS 240×320，ESP32-S3R8 + 8 MB PSRAM + 16 MB Flash，OV5640 摄像头，屏幕无触摸）
 
-**当前状态（v0.4.0，2026-11-01）**：网页图传（v0.2.1 含 HTTP OTA）、**票据屏 M1** 固件与**安卓 App 0.1.0**。
+**当前状态（v0.5.0，2026-11-01）**：网页图传（v0.2.1 含 HTTP OTA）、**票据屏 M2** 固件与**安卓 App 0.1.0**。
 - 网页图传：`http://esp32cam.local/`（实测 `192.168.88.32`），80 端口控制面 / 8080 端口 MJPEG 数据面
-- 票据屏：BLE `ESP32-NOTE`（NUS 服务）接收手机推送的票据文本，存 FFat 并显示在屏幕上；`http://esp32note.local/ota` 可无线升级
+- 票据屏：BLE `ESP32-NOTE`（NUS 服务）接收手机推送的票据文本，存 FFat 并显示在屏幕上；**24px 大字，60 秒无交互自动熄屏，敲一下板子点亮**；`http://esp32note.local/ota` 可无线升级
 - 安卓 App「票据屏」：扫描连接 → 粘贴文本 → 发送，见 [docs/安卓App.md](docs/安卓App.md)
 - 摄像头 `PID=0x5640`（OV5640）实测通过；整片 Flash 已备份可回滚
 - 详见 [CHANGELOG.md](CHANGELOG.md) · [firmware/webcam](firmware/webcam/README.md) · [firmware/notepad](firmware/notepad/README.md) · [android/](docs/安卓App.md) · [docs/](docs/)
@@ -20,9 +20,10 @@ E:\ESP32开发
 │  ├─ partitions_16MB.csv   与出厂固件同布局
 │  ├─ README.md             编译/烧录/接口说明/排查表
 │  └─ src\                  main.cpp / camera_pins.h / wifi_config.h / www.h
-├─ firmware\notepad\     ▶ 票据屏工程（BLE + 中文点阵字库 + FFat + OTA）
-│  ├─ data\cjk16.bin        16×16 字库（7540 字，295 KB，编入 flash）
-│  └─ src\                  main.cpp / cjk.* / notes.* / ui.* / wifi_config.h
+├─ firmware\notepad\     ▶ 票据屏工程（BLE + 中文点阵字库 + FFat + OTA + IMU 敲击唤醒）
+│  ├─ data\cjk16.bin        16×16 字库（7540 字，301 KB，编入 flash）
+│  ├─ data\cjk24.bin        24×24 字库（7540 字，603 KB，正文默认用这套）
+│  └─ src\                  main.cpp / cjk.* / notes.* / ui.* / qmi8658.* / power.* / wifi_config.h
 ├─ android\              ▶ 手机端 App（Kotlin，零第三方依赖，见 docs/安卓App.md）
 │  └─ app\src\main\        MainActivity.kt / BleLink.kt / activity_main.xml
 ├─ 设备图片\            设备照片（板子正面 / 屏幕 / 摄像头 / 装机后实拍）
@@ -46,7 +47,9 @@ E:\ESP32开发
 │  ├─ verify_cam.py     图传端到端自测（状态/单帧/拍照/流与控制面并发）
 │  ├─ ota.ps1           无线升级：编译 + POST /update + 等待上线 + 版本比对
 │  ├─ ble_test.py       票据屏自测：扫描 → 连接 → 下发 → 收回执
-│  ├─ gen_cjk_font.py   中文点阵字库生成（系统字体 → cjk16.bin）
+│  ├─ m2_test.py        熄屏/唤醒自测（自动熄屏、误唤醒、指令唤醒）
+│  ├─ gen_cjk_font.py   中文点阵字库生成（系统字体 → cjk{N}.bin，--size 16/24）
+│  ├─ preview_ui.py     离线渲染 320×240 版式预览 PNG（不用连板子）
 │  ├─ setup_android.ps1 Android 工具链一键安装（装到 tools\）
 │  ├─ build_apk.ps1     构建安卓 App 并复制到 dist\
 │  ├─ fw_inspect.py     固件离线分析（分区表 / app 描述符 / 关键词串）
@@ -105,7 +108,11 @@ Wi-Fi 凭据放 `firmware/webcam/src/wifi_secrets.h`，**该文件不入库**。
 | `L` | 列出全部条目 |
 | `P <id>` / `N` / `R` | 切到指定条 / 下一条 / 上一条 |
 | `D <id>` / `C` | 删除一条 / 全部清空 |
-| `B <0-100>` / `S <0\|1>` | 亮度 / 背光开关 |
+| `B <0-100>` / `S <0\|1>` | 亮度 / 手动熄屏·点亮 |
+| `O <秒>` | 自动熄屏超时（0 = 常亮，默认 60 秒） |
+| `A` | 读一次三轴加速度（g） |
+
+熄屏后敲一下板子（或桌面）就亮，不用按键——`GPIO0` 是 BOOT + LCD 复位脚，碰它会复位屏幕。
 
 App 使用说明见 [docs/安卓App.md](docs/安卓App.md)，字库细节见 [docs/中文点阵字库.md](docs/中文点阵字库.md)。
 
@@ -186,7 +193,7 @@ cd E:\ESP32开发
 - [x] HTTP OTA 无线升级（`/ota` + `POST /update`）· v0.2.1
 - [x] 票据屏 M1：BLE NUS + 中文点阵 + FFat + 翻页 · v0.3.0
 - [x] 安卓 App 0.1.0：扫描连接 + 粘贴 + 发送 · v0.4.0
-- [ ] 票据屏 M2：熄屏 + IMU 敲击唤醒
+- [x] 票据屏 M2：24px 大字 + 60 秒熄屏 + IMU 敲击唤醒 · v0.5.0
 - [ ] 票据屏 M3：截图裁剪上传（手机上框选 → 二值图 → BLE 分包）
 - [ ] 票据屏 M4：OCR 自动裁票面
 
@@ -208,6 +215,8 @@ WiFi STA Setting | 0.0.0.0 | PASS | No data
 
 ## 后续可做
 
-- 按 [docs/工具链方案.md](docs/工具链方案.md) 装 PlatformIO，跑 M0→M1→M2：blink / 点屏 / 摄像头自检
-- 摄像头自检顺带定论"FPC 到底接对没有"（`esp_camera_init` 返回 `ESP_OK` = 对）
-- 定方案后开工程：LVGL 界面 / 拍照图传 / SD 卡录像 / 传感器终端
+- 票据屏 M3：手机截屏 → 裁剪 → 1-bit 二值化 → BLE 分包上传（`I` 指令 + RLE，2–5 KB 一屏）
+- 票据屏 M4：OCR 自动定位票面（手机上抓文字块坐标，裁得更准）
+- 运动侦测推送 / SD 卡录像 / 屏幕第二页（IMU 与电量）
+- 摄像头自检固件仍在 `firmware/webcam`，两者共用 OTA 机制，互刷靠 `flash.ps1 -Project`
+
