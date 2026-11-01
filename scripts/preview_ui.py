@@ -123,7 +123,9 @@ def main():
         "请提前 30 分钟检票",
     ])
     ap.add_argument("--page", default="1/3")
-    ap.add_argument("--count", default="3 条")
+    ap.add_argument("--link", default="已连", help="已连 / 广播")
+    ap.add_argument("--ot", default="60s 熄屏", help="常亮 / 60s 熄屏")
+    ap.add_argument("--pgtext", default="2/3", help="页脚右侧的页码文字")
     ap.add_argument("--out", default=os.path.join(os.environ.get("TEMP", "."), "ui_preview.png"))
     args = ap.parse_args()
 
@@ -143,8 +145,12 @@ def main():
 
     for x in range(W):
         img.putpixel((x, FOOT_LINE), C_BAR)
-    small.draw(img, 8, FOOT_Y, "BLE: ESP32-NOTE", C_DIM, 200)
-    small.draw(img, W - 6 - small.width(args.count), FOOT_Y, args.count, C_DIM)
+    # 页脚三段：左连接态、中熄屏设置、右页码（与 ui.cpp 的 ui_footer_refresh() 一致）
+    left = "蓝牙 " + args.link
+    left_color = C_ACCENT if args.link.startswith("已连") else C_DIM
+    small.draw(img, 6, FOOT_Y, left, left_color, -1)
+    small.draw(img, (W - small.width(args.ot)) // 2, FOOT_Y, args.ot, C_DIM, -1)
+    small.draw(img, 314 - small.width(args.pgtext), FOOT_Y, args.pgtext, C_DIM, -1)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     img.save(args.out)
