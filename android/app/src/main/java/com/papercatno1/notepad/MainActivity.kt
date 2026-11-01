@@ -56,6 +56,12 @@ class MainActivity : Activity() {
 
         findViewById<Button>(R.id.btnClearDev).setOnClickListener { send("C") }
 
+        findViewById<Button>(R.id.btnAlwaysOn).setOnClickListener { send("O 0") }
+
+        findViewById<Button>(R.id.btnIdle60).setOnClickListener { send("O 60") }
+
+        findViewById<Button>(R.id.btnAccel).setOnClickListener { send("A") }
+
         updateStatus()
     }
 

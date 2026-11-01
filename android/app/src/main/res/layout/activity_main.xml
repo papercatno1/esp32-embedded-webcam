@@ -68,6 +68,33 @@
             android:text="清空设备" />
     </LinearLayout>
 
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnAlwaysOn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="常亮" />
+
+        <Button
+            android:id="@+id/btnIdle60"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="60秒熄屏" />
+
+        <Button
+            android:id="@+id/btnAccel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="看加速度" />
+    </LinearLayout>
+
     <EditText
         android:id="@+id/input"
         android:layout_width="match_parent"
