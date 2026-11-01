@@ -18,7 +18,7 @@
         android:padding="10dp"
         android:textColor="#FFFFFF"
         android:textSize="13sp"
-        android:text="拖动图片、双指缩放；绿框里就是屏幕上显示的样子" />
+        android:text="拖动图片、双指缩放；绿框里就是屏幕上会显示的区域" />
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -28,29 +28,6 @@
         android:orientation="horizontal"
         android:padding="10dp">
 
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="vertical">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="字的浓淡（太白往右拉）"
-                android:textColor="#FFFFFF"
-                android:textSize="12sp" />
-
-            <SeekBar
-                android:id="@+id/seekBias"
-                android:layout_width="150dp"
-                android:layout_height="wrap_content" />
-        </LinearLayout>
-
-        <Button
-            android:id="@+id/btnCropPages"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="页数：1" />
 
         <Button
             android:id="@+id/btnCropCancel"
@@ -64,6 +41,6 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="就发这块" />
+            android:text="下一步" />
     </LinearLayout>
 </FrameLayout>

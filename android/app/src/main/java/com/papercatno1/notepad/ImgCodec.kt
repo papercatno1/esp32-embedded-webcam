@@ -57,6 +57,19 @@ object ImgCodec {
         return out
     }
 
+    /** 1-bit 位图 -> ARGB 位图（预览用，1 像素 = 1 像素） */
+    fun bitsToBitmap(bits: ByteArray, w: Int, h: Int): Bitmap {
+        val stride = (w + 7) / 8
+        val px = IntArray(w * h)
+        for (y in 0 until h) {
+            for (x in 0 until w) {
+                val white = ((bits[y * stride + (x shr 3)].toInt() shr (7 - (x and 7))) and 1) == 1
+                px[y * w + x] = if (white) 0xFFFFFFFF.toInt() else 0xFF000000.toInt()
+            }
+        }
+        return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
+    }
+
     /** 成对 [count][value]，value 只能是 0x00 / 0xFF，count 1..255 */
     fun rleEncode(bits: ByteArray): ByteArray {
         val out = ByteArrayOutputStream()
