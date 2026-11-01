@@ -9,7 +9,7 @@
 
 #define SWIPE_START_DPS  70.0f  // 角速度超过这个值开始记录一次甩动（量程放开到 ±2048 后读数更真，阈值相应上调）
 #define SWIPE_END_DPS    25.0f  // 低于这个值算这次甩动结束
-#define SWIPE_MIN_DEG    40.0f  // 累计转过的角度超过多少度才算数
+#define SWIPE_MIN_DEG    30.0f  // 累计转过的角度超过多少度才算数
 #define SWIPE_COOLDOWN   450    // 两次甩动最小间隔（ms）
 // 快速一挥时超过 START 的采样点很少，累计角度偏小；用峰值兜底：
 // 峰值够大 + 至少转了 SWIPE_MIN_DEG_FALLBACK 度，也认
