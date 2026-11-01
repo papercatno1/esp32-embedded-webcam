@@ -38,6 +38,16 @@ static void bl_apply() {
   ledcWrite(0, s_screen_on ? (1023 * s_bl_pct) / 100 : 0);
 }
 
+// SD 卡探测会把 SCK/MOSI 的引脚复用抢走，屏幕就会花屏；
+// 探完卡调这个：重配总线 + 重发 LCD 初始化序列
+void ui_bus_recover() {
+  if (!s_bus || !s_gfx) return;
+  s_bus->begin();
+  s_gfx->begin();
+  s_gfx->setRotation(1);
+  s_gfx->fillScreen(C_BG);
+}
+
 void ui_begin() {
   ledcSetup(0, 5000, 10);
   ledcAttachPin(LCD_BL_PIN, 0);

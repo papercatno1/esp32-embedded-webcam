@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 void ui_begin();
+void ui_bus_recover();   // SD 探测后恢复 LCD 总线
 bool ui_ready();
 
 // 显示第 idx 条；-1 表示按 notes_cursor()

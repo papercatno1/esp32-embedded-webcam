@@ -95,6 +95,7 @@ static bool     s_sd_ok = false;
 static uint64_t s_sd_mb = 0;
 static bool     s_sd_hi_done = false;
 static bool     s_sd_present = false;
+static bool     s_sd_probed  = false;
 
 // 低层探一下：只发 CMD0，看卡在不在（区分"没卡"和"卡在但格式不认"）
 static bool sd_card_present() {
@@ -443,6 +444,12 @@ static void handle_cmd(const char *raw) {
       }
     }
   } else if (!strcmp(cmd, "E")) {
+    // 第一次收图前先认一下 TF 卡（探卡会抢走 SCK/MOSI，探完必须恢复总线）
+    if (!s_sd_probed) {
+      s_sd_probed = true;
+      if (sd_probe()) { notes_refresh_img_fs(); }
+      ui_bus_recover();
+    }
     if (!s_img_w || !s_img_len) {
       ble_send("ERR NOIMG");
     } else {
@@ -559,6 +566,8 @@ static void handle_cmd(const char *raw) {
       snprintf(o, sizeof(o), "OK M %s %llu", tn, (unsigned long long)s_sd_mb);
       notes_refresh_img_fs();
     }
+    s_sd_probed = true;
+    ui_bus_recover();
     ble_send(o);
     if (notes_count() > 0) ui_show_note(notes_cursor()); else ui_show_empty();
   } else if (!strcmp(cmd, "K")) {
@@ -588,8 +597,6 @@ void setup() {
 
   qmi_begin();          // 板上 QMI8658：敲击唤醒 + 甩动翻页
   power_begin(60000);   // 60 秒无交互熄屏；0 = 常亮
-  sd_probe();           // 开机就探一次 TF 卡（status.json 里能看到）
-  notes_refresh_img_fs();
   ui_set_timeout_s(power_timeout() / 1000);
   ui_set_link(false);
 
