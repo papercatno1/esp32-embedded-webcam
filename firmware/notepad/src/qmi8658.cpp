@@ -1,13 +1,13 @@
-// QMI8658A 最小驱动：只开加速度计，按 ±4g / 125Hz 采样
+// QMI8658A 最小驱动：加速度（敲击）+ 陀螺仪（甩动翻页），±4g / ±512dps / 125Hz
 //
 // 寄存器（QMI8658A 数据手册）
 //   0x00 WHO_AM_I   -> 0x05
-//   0x01 REVISION_ID
 //   0x02 CTRL1      bit6 ADDR_AI（寄存器自增）
 //   0x03 CTRL2      [7:4] aFS  [3:0] aODR
+//   0x04 CTRL3      [7:4] gFS  [3:0] gODR
 //   0x08 CTRL7      bit0 aEN  bit1 gEN
-//   0x2D STATUSINT  bit0 加速度数据就绪
-//   0x35 AX_L, AX_H, AY_L, AY_H, AZ_L, AZ_H
+//   0x35 AX_L..AZ_H（6 字节）
+//   0x3B GX_L..GZ_H（6 字节，紧跟在加速度后面）
 #include "qmi8658.h"
 
 #include <Wire.h>
@@ -18,6 +18,7 @@
 #define REG_WHO_AM_I 0x00
 #define REG_CTRL1    0x02
 #define REG_CTRL2    0x03
+#define REG_CTRL3    0x04
 #define REG_CTRL7    0x08
 #define REG_AX_L     0x35
 
@@ -25,8 +26,12 @@
 
 // CTRL2: aFS=±4g(0b0001) aODR=125Hz(0b0011)
 #define CTRL2_VAL 0x13
+// CTRL3: gFS=±512dps(0b0101) gODR=125Hz(0b0011)
+#define CTRL3_VAL 0x53
 // ±4g 时 32768 LSB = 4g
 #define LSB_PER_G 8192.0f
+// ±512dps 时灵敏度 65.5 LSB/dps
+#define LSB_PER_DPS 65.5f
 
 static uint8_t s_addr = 0;
 static bool    s_ok = false;
@@ -70,9 +75,11 @@ bool qmi_begin() {
 
   wr(REG_CTRL1, 0x40);        // 寄存器地址自增
   delay(2);
-  wr(REG_CTRL2, CTRL2_VAL);   // ±4g / 125Hz
+  wr(REG_CTRL2, CTRL2_VAL);   // 加速度 ±4g / 125Hz
   delay(2);
-  wr(REG_CTRL7, 0x01);        // 只开加速度计
+  wr(REG_CTRL3, CTRL3_VAL);   // 陀螺仪 ±512dps / 125Hz
+  delay(2);
+  wr(REG_CTRL7, 0x03);        // 加速度 + 陀螺仪都开
   delay(30);
 
   // 读几次求出静止基线，顺便验证数据是否合理
@@ -100,14 +107,37 @@ bool qmi_begin() {
   return true;
 }
 
+static inline int16_t le16(const uint8_t *b) {
+  return (int16_t)((uint16_t)b[0] | ((uint16_t)b[1] << 8));
+}
+
 bool qmi_read_accel(float &ax, float &ay, float &az) {
   uint8_t b[6];
   if (!rd(REG_AX_L, b, 6)) return false;
-  int16_t rx = (int16_t)((uint16_t)b[0] | ((uint16_t)b[1] << 8));
-  int16_t ry = (int16_t)((uint16_t)b[2] | ((uint16_t)b[3] << 8));
-  int16_t rz = (int16_t)((uint16_t)b[4] | ((uint16_t)b[5] << 8));
-  ax = rx / LSB_PER_G;
-  ay = ry / LSB_PER_G;
-  az = rz / LSB_PER_G;
+  ax = le16(b) / LSB_PER_G;
+  ay = le16(b + 2) / LSB_PER_G;
+  az = le16(b + 4) / LSB_PER_G;
+  return true;
+}
+
+bool qmi_read_gyro(float &gx, float &gy, float &gz) {
+  uint8_t b[6];
+  if (!rd(REG_AX_L + 6, b, 6)) return false;   // 0x3B
+  gx = le16(b) / LSB_PER_DPS;
+  gy = le16(b + 2) / LSB_PER_DPS;
+  gz = le16(b + 4) / LSB_PER_DPS;
+  return true;
+}
+
+bool qmi_read_motion(float &ax, float &ay, float &az,
+                     float &gx, float &gy, float &gz) {
+  uint8_t b[12];
+  if (!rd(REG_AX_L, b, 12)) return false;
+  ax = le16(b) / LSB_PER_G;
+  ay = le16(b + 2) / LSB_PER_G;
+  az = le16(b + 4) / LSB_PER_G;
+  gx = le16(b + 6) / LSB_PER_DPS;
+  gy = le16(b + 8) / LSB_PER_DPS;
+  gz = le16(b + 10) / LSB_PER_DPS;
   return true;
 }

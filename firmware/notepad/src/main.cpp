@@ -36,7 +36,7 @@
 #include "qmi8658.h"
 #include "power.h"
 
-#define FW_VERSION "0.2.0"
+#define FW_VERSION "0.3.0"
 
 // ---------------- BLE ----------------
 #define NUS_SVC "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -46,6 +46,7 @@
 static NimBLECharacteristic *s_tx = nullptr;
 static volatile bool s_ble_conn = false;
 static volatile int  s_ble_mtu = 23;
+static volatile uint32_t s_cmd_rx = 0;   // 收到的指令条数（诊断用）
 
 struct CmdLine { char text[1600]; };
 static QueueHandle_t s_cmdq = nullptr;
@@ -82,6 +83,8 @@ class SrvCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer *s) override {
     s_ble_conn = true;
     Serial.println("[BLE] 已连接");
+    ui_set_link(true);
+    ui_footer_refresh();
   }
   void onMTUChange(uint16_t mtu, ble_gap_conn_desc *desc) override {
     s_ble_mtu = mtu;
@@ -90,6 +93,8 @@ class SrvCallbacks : public NimBLEServerCallbacks {
   void onDisconnect(NimBLEServer *s) override {
     s_ble_conn = false;
     Serial.println("[BLE] 断开，重新广播");
+    ui_set_link(false);
+    ui_footer_refresh();
     NimBLEDevice::startAdvertising();
   }
 };
@@ -157,11 +162,12 @@ static esp_err_t h_root(httpd_req_t *req) {
 }
 
 static esp_err_t h_status(httpd_req_t *req) {
-  char buf[384];
+  char buf[448];
   snprintf(buf, sizeof(buf),
            "{\"ver\":\"" FW_VERSION "\",\"up\":%lu,\"heap\":%u,\"wifi\":\"%s\","
            "\"ip\":\"%s\",\"rssi\":%d,\"ble\":%d,\"mtu\":%d,\"notes\":%d,\"cur\":%d,"
-           "\"bl\":%d,\"ot\":%lu,\"imu\":%d,\"idle\":%lu}",
+           "\"bl\":%d,\"ot\":%lu,\"imu\":%d,\"idle\":%lu,\"rx\":%lu,\"sw\":%lu,"
+           "\"swd\":%.1f,\"swa\":\"%c\"}",
            (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            (WiFi.getMode() == WIFI_AP) ? "ap" : "sta",
            cur_ip().toString().c_str(),
@@ -170,7 +176,10 @@ static esp_err_t h_status(httpd_req_t *req) {
            power_is_blank() ? 0 : 1,
            (unsigned long)(power_timeout() / 1000),
            qmi_ok() ? 1 : 0,
-           (unsigned long)(power_idle_ms() / 1000));
+           (unsigned long)(power_idle_ms() / 1000),
+           (unsigned long)s_cmd_rx,
+           (unsigned long)power_swipe_count(),
+           power_last_swipe_deg(), power_last_swipe_axis());
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
@@ -269,6 +278,7 @@ static void do_show(int idx) {
 
 static void handle_cmd(const char *raw) {
   Serial.printf("[CMD] %s\n", raw);
+  s_cmd_rx++;
   power_activity();          // 任何指令都算一次交互（顺手点亮屏幕）
   char buf[1600];
   strncpy(buf, raw, sizeof(buf) - 1);
@@ -356,6 +366,8 @@ static void handle_cmd(const char *raw) {
     if (sec > 86400) sec = 86400;
     if (sec == 0) power_activity();
     power_set_timeout(sec * 1000UL);
+    ui_set_timeout_s(power_timeout() / 1000);
+    ui_footer_refresh();
     char o[32];
     snprintf(o, sizeof(o), "OK O %lu", (unsigned long)(power_timeout() / 1000));
     ble_send(o);
@@ -364,6 +376,19 @@ static void handle_cmd(const char *raw) {
     char o[64];
     if (qmi_read_accel(ax, ay, az)) snprintf(o, sizeof(o), "OK A %.2f %.2f %.2f", ax, ay, az);
     else snprintf(o, sizeof(o), "ERR IMU");
+    ble_send(o);
+  } else if (!strcmp(cmd, "G")) {
+    float ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0;
+    char o[96];
+    if (qmi_read_motion(ax, ay, az, gx, gy, gz))
+      snprintf(o, sizeof(o), "OK G %.2f %.2f %.2f | %.0f %.0f %.0f", ax, ay, az, gx, gy, gz);
+    else snprintf(o, sizeof(o), "ERR IMU");
+    ble_send(o);
+  } else if (!strcmp(cmd, "Q")) {
+    // 甩动统计：次数 / 最近角度 / 轴，用来标定翻页灵敏度和方向
+    char o[96];
+    snprintf(o, sizeof(o), "OK Q %lu %.1f %c", (unsigned long)power_swipe_count(),
+             power_last_swipe_deg(), power_last_swipe_axis());
     ble_send(o);
   } else if (cmd[0]) {
     ble_send("ERR UNKNOWN");
@@ -381,8 +406,10 @@ void setup() {
   boolean ok = notes_begin();
   Serial.printf("[NOTE] 存储 %s\n", ok ? "可用" : "不可用");
 
-  qmi_begin();          // 板上 QMI8658，用来做敲击唤醒
+  qmi_begin();          // 板上 QMI8658：敲击唤醒 + 甩动翻页
   power_begin(60000);   // 60 秒无交互熄屏；0 = 常亮
+  ui_set_timeout_s(power_timeout() / 1000);
+  ui_set_link(false);
 
   if (notes_count() > 0) ui_show_note(notes_cursor());
   else ui_show_empty();
@@ -404,7 +431,14 @@ void loop() {
     handle_cmd(cl.text);
   }
 
-  power_tick();   // 超时熄屏 / 敲击唤醒
+  power_tick();   // 超时熄屏 / 敲击唤醒 / 甩动检测
+
+  // 甩一下翻页：往右下一条，往左上一条
+  int sw = power_take_swipe();
+  if (sw != 0 && notes_count() > 1) {
+    do_show(notes_cursor() + (sw > 0 ? 1 : -1));
+    power_activity();
+  }
 
   static uint32_t last = 0;
   if (millis() - last > 30000) {

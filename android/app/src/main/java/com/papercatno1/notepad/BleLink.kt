@@ -53,6 +53,10 @@ class BleLink(context: Context, private val onEvent: (String) -> Unit) {
     var connected: Boolean = false
         private set
 
+    /** 服务和特征都拿到、可以真正发指令 */
+    var ready: Boolean = false
+        private set
+
     private val writeQueue = ArrayDeque<ByteArray>()
 
     // ---------------- 扫描 ----------------
@@ -121,6 +125,10 @@ class BleLink(context: Context, private val onEvent: (String) -> Unit) {
                 g.discoverServices()
             } else {
                 connected = false
+                ready = false
+                rxChar = null
+                txChar = null
+                mtu = 23
                 log("断开 (status=$status)")
                 g.close()
             }
@@ -128,30 +136,51 @@ class BleLink(context: Context, private val onEvent: (String) -> Unit) {
 
         @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(g: BluetoothGatt, status: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                log("发现服务失败 status=$status，重试一次")
+                g.discoverServices()
+                return
+            }
             val svc = g.getService(SVC)
             if (svc == null) {
-                log("找不到 NUS 服务，确认设备固件")
+                log("找不到 NUS 服务（status=$status，共 ${g.services?.size ?: 0} 个服务），确认设备固件")
                 g.disconnect()
                 return
             }
             rxChar = svc.getCharacteristic(RX)
             txChar = svc.getCharacteristic(TX)
+            if (rxChar == null || txChar == null) {
+                log("NUS 特征缺失 rx=${rxChar != null} tx=${txChar != null}")
+                g.disconnect()
+                return
+            }
+            ready = true
             log("服务就绪，协商 MTU...")
-            g.requestMtu(517)
+            if (!g.requestMtu(517)) {
+                log("MTU 协商请求被拒，改用 23 字节分片")
+                enableNotify(g)
+            }
         }
 
         @SuppressLint("MissingPermission", "Deprecated")
         override fun onMtuChanged(g: BluetoothGatt, newMtu: Int, status: Int) {
             mtu = newMtu
-            log("MTU=$newMtu")
+            log("MTU=$newMtu (status=$status)")
+            enableNotify(g)
+        }
+
+        @SuppressLint("MissingPermission", "Deprecated")
+        private fun enableNotify(g: BluetoothGatt) {
             val tx = txChar ?: return
-            g.setCharacteristicNotification(tx, true)
+            val ok = g.setCharacteristicNotification(tx, true)
             val desc = tx.getDescriptor(CCCD)
             if (desc != null) {
                 desc.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                g.writeDescriptor(desc)
+                if (!g.writeDescriptor(desc)) log("订阅回执写入失败")
+            } else {
+                log("找不到 CCCD 描述符")
             }
-            log("已订阅回执")
+            log(if (ok) "已订阅回执" else "订阅回执失败")
         }
 
         @Suppress("Deprecation")
@@ -166,6 +195,9 @@ class BleLink(context: Context, private val onEvent: (String) -> Unit) {
             ch: BluetoothGattCharacteristic,
             status: Int
         ) {
+            if (status != BluetoothGatt.GATT_SUCCESS) {
+                log("写回执 status=$status")
+            }
             drainQueue()
         }
     }
@@ -173,6 +205,10 @@ class BleLink(context: Context, private val onEvent: (String) -> Unit) {
     // ---------------- 发送 ----------------
     /** 发送一行指令（自动补 '\n' 并按 MTU 切片） */
     fun send(command: String) {
+        if (!ready) {
+            log("服务还没就绪（connected=$connected），这条没发：$command")
+            return
+        }
         val payload = if (command.endsWith("\n")) command else "$command\n"
         val bytes = payload.toByteArray(Charsets.UTF_8)
         log("-> ${command.take(60)}${if (command.length > 60) "…" else ""}  (${bytes.size} 字节)")
@@ -189,14 +225,20 @@ class BleLink(context: Context, private val onEvent: (String) -> Unit) {
 
     @SuppressLint("MissingPermission", "Deprecated")
     private fun drainQueue() {
-        val g = gatt ?: return
-        val ch = rxChar ?: return
+        val g = gatt
+        val ch = rxChar
+        if (g == null || ch == null) {
+            if (writeQueue.isNotEmpty()) {
+                log("链路未就绪（gatt=${g != null} rx=${ch != null}），这条没发出去")
+                writeQueue.clear()
+            }
+            return
+        }
         val next = writeQueue.removeFirstOrNull() ?: return
-        g.setCharacteristicNotification(txChar, true)
         ch.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
         ch.value = next
         if (!g.writeCharacteristic(ch)) {
-            log("写失败，链路可能已断")
+            log("写失败，链路可能已断（${next.size} 字节）")
             writeQueue.clear()
             return
         }
@@ -215,6 +257,7 @@ class BleLink(context: Context, private val onEvent: (String) -> Unit) {
         rxChar = null
         txChar = null
         connected = false
+        ready = false
         mtu = 23
         writeQueue.clear()
     }

@@ -74,6 +74,33 @@
         android:orientation="horizontal">
 
         <Button
+            android:id="@+id/btnPrev"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="上一条" />
+
+        <Button
+            android:id="@+id/btnNext"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="下一条" />
+
+        <Button
+            android:id="@+id/btnAccel"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="看加速度" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
             android:id="@+id/btnAlwaysOn"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
@@ -88,11 +115,11 @@
             android:text="60秒熄屏" />
 
         <Button
-            android:id="@+id/btnAccel"
+            android:id="@+id/btnSwipeStat"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="看加速度" />
+            android:text="甩动统计" />
     </LinearLayout>
 
     <EditText
@@ -114,6 +141,7 @@
         android:textStyle="bold" />
 
     <ScrollView
+        android:id="@+id/logWrap"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1">

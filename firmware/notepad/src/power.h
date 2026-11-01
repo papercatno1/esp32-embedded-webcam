@@ -1,8 +1,9 @@
 #pragma once
-// 熄屏与敲击唤醒
+// 熄屏、敲击唤醒、甩动翻页
 //
 // 规则：一段时间没有交互（BLE 指令 / 翻页 / 上电）就关背光；
-// 熄屏期间用 QMI8658 的加速度变化判定"敲一下"，命中即点亮。
+// 熄屏期间用 QMI8658 的加速度变化判定"敲一下"，命中即点亮；
+// 无论亮灭，陀螺仪转得够快（约 50 度以上）判定为一次"甩动"，亮屏时用来翻页。
 // 没有 IMU 时不允许自动熄屏（否则点不亮，只能复位）。
 #include <Arduino.h>
 
@@ -24,8 +25,14 @@ bool power_is_blank();
 // 距上次交互的毫秒数
 uint32_t power_idle_ms();
 
-// loop 里调用：超时熄屏 / 熄屏时检测敲击
+// loop 里调用：超时熄屏 / 敲击唤醒 / 甩动检测
 void power_tick();
 
-// 调试：最近一次敲击事件的加速度变化量
-float power_last_impulse();
+// 取走一次待处理的甩动：-1 上一条，+1 下一条，0 没有
+int power_take_swipe();
+
+// 调试信息
+float    power_last_impulse();     // 最近一次敲击的加速度变化量（g）
+float    power_last_swipe_deg();   // 最近一次甩动累计转角（度）
+char     power_last_swipe_axis();  // 'x' / 'y' / 'z'
+uint32_t power_swipe_count();      // 甩动次数

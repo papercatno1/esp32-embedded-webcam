@@ -19,6 +19,11 @@ static Arduino_GFX     *s_gfx = nullptr;
 static int  s_bl_pct = 100;
 static bool s_screen_on = true;
 
+// 页脚状态（由 main 更新）
+static bool     s_ble_link = false;   // BLE 是否已连
+static uint32_t s_ot_sec   = 60;      // 0 = 常亮
+static int      s_page = 1, s_pages = 0;
+
 // 配色
 #define C_BG      0x0000
 #define C_BAR     0x18C3   // 深蓝标题条
@@ -65,6 +70,35 @@ void ui_screen_on(bool on) {
 }
 
 bool ui_screen_is_on() { return s_screen_on; }
+
+// ---- 页脚状态 ----
+void ui_set_link(bool connected) { s_ble_link = connected; }
+void ui_set_timeout_s(uint32_t sec) { s_ot_sec = sec; }
+void ui_set_page(int idx, int total) { s_page = idx; s_pages = total; }
+
+void ui_footer_refresh() {
+  if (!s_gfx) return;
+  s_gfx->fillRect(0, FOOT_LINE, 320, 240 - FOOT_LINE, C_BG);
+  s_gfx->drawFastHLine(0, FOOT_LINE, 320, C_BAR);
+
+  // 左：蓝牙状态（连着 = 亮绿，广播中 = 灰）
+  cjk_draw(s_gfx, 6, FOOT_Y, s_ble_link ? "蓝牙 已连" : "蓝牙 广播",
+           s_ble_link ? C_ACCENT : C_DIM, -1, CJK_S);
+
+  // 中：常亮 / 多少秒熄屏
+  char mode[24];
+  if (s_ot_sec == 0) snprintf(mode, sizeof(mode), "常亮");
+  else snprintf(mode, sizeof(mode), "%lus 熄屏", (unsigned long)s_ot_sec);
+  int mw = cjk_width(mode, CJK_S);
+  cjk_draw(s_gfx, (320 - mw) / 2, FOOT_Y, mode, C_DIM, -1, CJK_S);
+
+  // 右：第几条 / 共几条
+  char page[20];
+  if (s_pages > 0) snprintf(page, sizeof(page), "%d/%d", s_page, s_pages);
+  else snprintf(page, sizeof(page), "0/0");
+  int pw = cjk_width(page, CJK_S);
+  cjk_draw(s_gfx, 314 - pw, FOOT_Y, page, C_DIM, -1, CJK_S);
+}
 
 static void clear() {
   if (!s_gfx) return;
@@ -139,13 +173,8 @@ void ui_show_note(int idx) {
   }
 
   // 页脚
-  s_gfx->drawFastHLine(0, FOOT_LINE, 320, C_BAR);
-  cjk_draw(s_gfx, 8, FOOT_Y, "BLE: ESP32-NOTE", C_DIM, 200, CJK_S);
-
-  // 右下角：条目数 + 熄屏提示
-  snprintf(page, sizeof(page), "%d 条", notes_count());
-  pw = cjk_width(page, CJK_S);
-  cjk_draw(s_gfx, 312 - pw, FOOT_Y, page, C_DIM, -1, CJK_S);
+  ui_set_page(notes_count() ? idx + 1 : 0, notes_count());
+  ui_footer_refresh();
 }
 
 void ui_show_empty() {
@@ -155,9 +184,8 @@ void ui_show_empty() {
   cjk_draw(s_gfx, 6, 5, "ESP32-NOTE 票据屏", C_TITLE, 312, CJK_L);
   cjk_draw(s_gfx, 24, 82, "等待手机推送", C_TEXT, -1, CJK_L);
   cjk_draw(s_gfx, 24, 118, "用蓝牙发送票据信息", C_DIM, -1, CJK_L);
-  s_gfx->drawFastHLine(0, FOOT_LINE, 320, C_BAR);
-  cjk_draw(s_gfx, 8, FOOT_Y, "BLE: ESP32-NOTE", C_DIM, 200, CJK_S);
-  cjk_draw(s_gfx, 8, FOOT_Y, "", C_DIM, -1, CJK_S);
+  ui_set_page(0, 0);
+  ui_footer_refresh();
 }
 
 void ui_message(const char *l1, const char *l2, const char *l3) {

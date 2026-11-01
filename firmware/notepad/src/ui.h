@@ -17,3 +17,9 @@ int  ui_backlight_get();
 // 背光开关（熄屏用，不改动设定亮度）
 void ui_screen_on(bool on);
 bool ui_screen_is_on();
+
+// 页脚状态：蓝牙是否已连、多少秒熄屏（0 = 常亮）、当前第几条/共几条
+void ui_set_link(bool connected);
+void ui_set_timeout_s(uint32_t sec);
+void ui_set_page(int idx, int total);
+void ui_footer_refresh();     // 只重画页脚（状态变了就调一下）

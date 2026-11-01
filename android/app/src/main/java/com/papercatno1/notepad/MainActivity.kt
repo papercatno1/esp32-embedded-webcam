@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 
@@ -17,7 +18,9 @@ class MainActivity : Activity() {
     private lateinit var ble: BleLink
     private lateinit var statusView: TextView
     private lateinit var logView: TextView
+    private lateinit var logWrap: ScrollView
     private lateinit var input: EditText
+    private var lastReply = ""
 
     private val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         arrayOf(
@@ -34,6 +37,7 @@ class MainActivity : Activity() {
 
         statusView = findViewById(R.id.status)
         logView = findViewById(R.id.log)
+        logWrap = findViewById(R.id.logWrap)
         input = findViewById(R.id.input)
 
         ble = BleLink(this) { msg -> runOnUiThread { appendLog(msg) } }
@@ -56,11 +60,17 @@ class MainActivity : Activity() {
 
         findViewById<Button>(R.id.btnClearDev).setOnClickListener { send("C") }
 
+        findViewById<Button>(R.id.btnPrev).setOnClickListener { send("R") }
+
+        findViewById<Button>(R.id.btnNext).setOnClickListener { send("N") }
+
         findViewById<Button>(R.id.btnAlwaysOn).setOnClickListener { send("O 0") }
 
         findViewById<Button>(R.id.btnIdle60).setOnClickListener { send("O 60") }
 
         findViewById<Button>(R.id.btnAccel).setOnClickListener { send("A") }
+
+        findViewById<Button>(R.id.btnSwipeStat).setOnClickListener { send("Q") }
 
         updateStatus()
     }
@@ -101,8 +111,8 @@ class MainActivity : Activity() {
             toast("先写点内容")
             return
         }
-        if (!ble.connected) {
-            toast("还没连上设备")
+        if (!ble.ready) {
+            toast(if (ble.connected) "还在等服务就绪，稍等下" else "还没连上设备")
             return
         }
         val lines = raw.split("\n").map { it.trim() }.filter { it.isNotEmpty() }
@@ -119,8 +129,8 @@ class MainActivity : Activity() {
     }
 
     private fun send(cmd: String) {
-        if (!ble.connected) {
-            toast("还没连上设备")
+        if (!ble.ready) {
+            toast(if (ble.connected) "还在等服务就绪，稍等下" else "还没连上设备")
             return
         }
         ble.send(cmd)
@@ -128,15 +138,18 @@ class MainActivity : Activity() {
 
     private fun appendLog(msg: String) {
         logView.append(msg + "\n")
+        lastReply = msg
         updateStatus()
+        logWrap.post { logWrap.fullScroll(android.view.View.FOCUS_DOWN) }
     }
 
     private fun updateStatus() {
-        statusView.text = if (ble.connected) {
-            "已连接 · MTU ${ble.mtu}"
-        } else {
-            "未连接 · 点「扫描连接」"
+        val link = when {
+            ble.ready -> "已连接 · MTU ${ble.mtu}"
+            ble.connected -> "已连接，等服务就绪…"
+            else -> "未连接 · 点「扫描连接」"
         }
+        statusView.text = if (lastReply.isEmpty()) link else "$link\n最近：$lastReply"
     }
 
     private fun toast(msg: String) = Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
