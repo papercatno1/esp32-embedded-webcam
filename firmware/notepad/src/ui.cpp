@@ -49,21 +49,29 @@ void ui_force_redraw() {
 void ui_show_splash(const char *ver) {
   if (!s_gfx) return;
   s_gfx->setRotation(1);
-  s_gfx->fillScreen(C_BG);
-  // 简单图案：一个「百宝箱」+ 向上箭头，箭头逐帧上移
-  for (int f = 0; f < 6; f++) {
-    s_gfx->fillRect(0, 0, 320, 240, C_BG);
-    cjk_draw(s_gfx, 40, 52, "ESP-32 百宝箱", C_TITLE, -1, CJK_L);
-    cjk_draw(s_gfx, 40, 92, "ESP32-S3 · 16MB · 8MB PSRAM", C_DIM, -1, CJK_S);
-    int bx = 130, by = 150;
-    s_gfx->drawRect(bx, by, 60, 34, C_ACCENT);
-    s_gfx->drawFastHLine(bx, by + 12, 60, C_ACCENT);
-    s_gfx->drawFastVLine(bx + 30, by, 12, C_ACCENT);
-    for (int i = 0; i < 5; i++) s_gfx->drawFastHLine(bx + 12 + i * 3, by - 18 - f * 6 - i * 4, 36 - i * 6, C_TEXT);
-    cjk_draw(s_gfx, 40, 200, "开机中…", C_DIM, -1, CJK_S);
-    delay(70);
+  for (int f = 0; f < 7; f++) {
+    s_gfx->fillScreen(C_BG);
+    cjk_draw(s_gfx, 22, 34, "ESP-32", C_TITLE, -1, CJK_L);
+    cjk_draw(s_gfx, 126, 34, "百宝箱", C_TITLE, -1, CJK_L);
+    cjk_draw(s_gfx, 24, 72, "ESP32-S3   16MB   8MB PSRAM", C_DIM, -1, CJK_S);
+
+    // 箱子：外框 + 盖线 + 提手
+    const int bx = 120, by = 150, bw = 80, bh = 44;
+    s_gfx->drawRect(bx, by, bw, bh, C_ACCENT);
+    s_gfx->drawFastHLine(bx, by + 12, bw, C_ACCENT);
+    s_gfx->drawFastVLine(bx + bw / 2, by, 12, C_ACCENT);
+    s_gfx->drawFastHLine(bx + 24, by + bh / 2 + 4, 32, C_DIM);
+
+    // 上升箭头：竖线 + 箭头尖，逐帧上移
+    int ay = by - 12 - f * 7;
+    s_gfx->drawFastVLine(bx + bw / 2, ay, 26, C_TEXT);
+    for (int i = 0; i < 6; i++) {
+      s_gfx->drawFastHLine(bx + bw / 2 - 6 + i, ay - 6 + i, 12 - i * 2, C_TEXT);
+    }
+    cjk_draw(s_gfx, 24, 206, "开机中", C_DIM, -1, CJK_S);
+    if (ver) cjk_draw(s_gfx, 250, 206, ver, C_DIM, -1, CJK_S);
+    delay(60);
   }
-  if (ver) cjk_draw(s_gfx, 210, 200, ver, C_DIM, -1, CJK_S);
 }
 
 void ui_bus_recover() {

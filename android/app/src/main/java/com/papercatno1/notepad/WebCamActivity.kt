@@ -10,6 +10,8 @@ import android.os.Handler
 import android.os.Looper
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import androidx.activity.ComponentActivity
 
 /**
@@ -17,6 +19,9 @@ import androidx.activity.ComponentActivity
  * 连上 BLE 后每隔 1.2 秒发一次 SYS 直到拿到 ip=，再切进视频页。
  */
 class WebCamActivity : ComponentActivity() {
+    private var s_retry = 0
+    private fun logD(m: String) { android.util.Log.i("WebCam", m) }
+
 
     private lateinit var web: WebView
     private lateinit var ble: BleLink
@@ -32,7 +37,15 @@ class WebCamActivity : ComponentActivity() {
 
         web = WebView(this)
         web.settings.javaScriptEnabled = true
-        web.webViewClient = WebViewClient()
+        web.webViewClient = object : WebViewClient() {
+            override fun onReceivedError(v: WebView, req: WebResourceRequest, err: WebResourceError) {
+                if (!req.isForMainFrame) return
+                if (s_retry >= 3) { logD("网页重试 3 次仍失败，请确认设备已进入照相模式"); return }
+                s_retry++
+                logD("加载失败，${s_retry}/3 次重试…")
+                v.postDelayed({ v.reload() }, 1500)
+            }
+        }
         setContentView(web)
 
         ble = BleLink(this) { msg -> runOnUiThread { onBle(msg) } }
@@ -87,7 +100,7 @@ class WebCamActivity : ComponentActivity() {
         handler.removeCallbacks(poll)
         prefs.edit().putString("ip", ip).apply()
         ble.send("MODE cam")                 // 让设备真的进照相模式
-        web.loadUrl("http://$ip:8080/")
+        web.postDelayed({ web.loadUrl("http://$ip:8080/") }, 800)
     }
 
     private fun showStatus(title: String, sub: String) {

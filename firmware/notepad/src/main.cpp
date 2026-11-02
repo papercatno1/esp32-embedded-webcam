@@ -283,7 +283,7 @@ static esp_err_t h_status(httpd_req_t *req) {
            "{\"ver\":\"" FW_VERSION "\",\"up\":%lu,\"heap\":%u,\"wifi\":\"%s\","
            "\"ip\":\"%s\",\"rssi\":%d,\"ble\":%d,\"mtu\":%d,\"notes\":%d,\"cur\":%d,"
            "\"bl\":%d,\"ot\":%lu,\"imu\":%d,\"idle\":%lu,\"rx\":%lu,\"sw\":%lu,"
-           "\"mode\":%d,\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d,\"sd\":%d,\"sdm\":%llu,\"ifs\":\"%s\",\"lc\":\"%s\",\"lr\":\"%s\",\"iw\":%d,\"ih\":%d,\"il\":%u,\"isz\":%u,\"bk\":%u,\"fl\":%u,\"cam\":%d,\"cf\":%.1f,\"cv\":%d,\"cfo\":%lu}",
+           "\"mode\":%d,\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d,\"sd\":%d,\"sdm\":%llu,\"ifs\":\"%s\",\"lc\":\"%s\",\"lr\":\"%s\",\"iw\":%d,\"ih\":%d,\"il\":%u,\"isz\":%u,\"bk\":%u,\"fl\":%u,\"cam\":%d,\"cerr\":%d,\"cf\":%.1f,\"cv\":%d,\"cfo\":%lu}",
            (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            (WiFi.getMode() == WIFI_AP) ? "ap" : "sta",
            cur_ip().toString().c_str(),
@@ -295,7 +295,7 @@ static esp_err_t h_status(httpd_req_t *req) {
            (unsigned long)(power_idle_ms() / 1000),
            (unsigned long)s_cmd_rx,
            (unsigned long)power_swipe_count(),
-           s_mode, cam_last_err(), power_last_swipe_deg(), power_last_swipe_axis(),
+           s_mode, cam_last_err(), cam_last_err(), power_last_swipe_deg(), power_last_swipe_axis(),
            power_last_mag(), power_peak_mag(), power_get_swipe_sign(),
            s_sd_ok ? 1 : 0, (unsigned long long)s_sd_mb, notes_img_fs_name(),
            s_last_cmd, s_last_rep, s_img_w, s_img_h, (unsigned)s_img_len,
