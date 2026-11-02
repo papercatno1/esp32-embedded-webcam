@@ -6,6 +6,9 @@ void ui_begin();
 uint32_t ui_last_img_ink();   // 上一张图画了多少个黑点（0=没画出来）
 void ui_bus_recover();   // SD 探测后恢复 LCD 总线
 bool ui_ready();
+
+// 重新初始化面板（挂 SD 会重配 FSPI，之后要重发面板初始化序列）
+void ui_reinit_panel();
 void ui_set_invert(int on);
 
 // 显示第 idx 条；-1 表示按 notes_cursor()

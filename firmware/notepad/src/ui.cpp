@@ -49,6 +49,7 @@ void ui_force_redraw() {
 void ui_show_splash(const char *ver) {
   if (!s_gfx) return;
   s_gfx->setRotation(1);
+  s_gfx->invertDisplay(false);        // 强制正显，避免 NVS 里的 INV=1 把黑底翻成白底
   s_gfx->fillScreen(0x0000);          // 黑底
 
   // 大标题：ESP-32 百宝箱（24px 字形放大 2 倍 = 48px，白字）
@@ -100,6 +101,14 @@ void ui_begin() {
 }
 
 bool ui_ready() { return s_gfx != nullptr; }
+
+void ui_reinit_panel() {
+  if (!s_gfx) return;
+  s_gfx->begin(40000000);        // 只重发面板初始化，不重建 SPI 总线（否则 SD 会话会挂）
+  s_gfx->setRotation(1);
+  s_gfx->invertDisplay(false);   // 强制正显：黑底白字
+  s_gfx->fillScreen(0x0000);
+}
 
 // ST7789 的反显开关：IPS 屏有的需要 INVON，有的必须 INVOFF。
 // 白底黑字就是反显状态，用 INV 指令切换。

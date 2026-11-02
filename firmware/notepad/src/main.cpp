@@ -39,7 +39,7 @@
 #include "power.h"
 #include "cam.h"
 
-#define FW_VERSION "0.4.4"
+#define FW_VERSION "0.4.5"
 
 // ---------------- BLE ----------------
 #define NUS_SVC "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -701,7 +701,6 @@ void setup() {
   // 谁后初始化谁把总线拿走 —— LCD 先初始化就会被 SD 弄成花屏）
   ui_begin();
   cjk_init();
-  ui_show_splash(FW_VERSION);     // 初始化期间显示欢迎页
 
   // TF 卡与 LCD 共用 SCK(39)/MOSI(38)：LCD 初始化之后再挂卡，挂完把总线还给 LCD，
   // 之后两边各自 startWrite/endWrite，互不影响（工厂 demo 本来就这么共存）。
@@ -712,6 +711,9 @@ void setup() {
   }
   s_sd_probed = true;
   Serial.printf("[SD] 开机挂卡 %s %llu MB\n", sd_boot ? "OK" : "失败", (unsigned long long)s_sd_mb);
+  ui_reinit_panel();              // 挂卡重配过 FSPI，重发面板初始化
+  ui_show_splash(FW_VERSION);     // 初始化期间显示欢迎页
+  const uint32_t splash_ms = millis();
   boolean ok = notes_begin();
   Serial.printf("[NOTE] 存储 %s\n", ok ? "可用" : "不可用");
 
@@ -725,7 +727,7 @@ void setup() {
   wifi_begin();
 
   if (ui_ready()) {
-    if (millis() < 1600) delay(1600 - millis());   // 欢迎页至少显示 1.6 秒
+    if (millis() - splash_ms < 2500) delay(2500 - (millis() - splash_ms));
     s_mode = 1;                   // 开机默认进「系统信息」
     sys_snapshot_draw();
   }
