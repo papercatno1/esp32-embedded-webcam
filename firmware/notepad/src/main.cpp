@@ -408,7 +408,9 @@ static void do_show(int idx) {
     }
   }
   ui_show_splash(FW_VERSION);
-  ui_show_empty();
+  delay(2500);                    // 欢迎页停留久一点，别一闪而过
+  s_mode = 1;                     // 开机默认进「系统信息」
+  sys_snapshot_draw();
     return;
   }
   ui_show_note(notes_cursor());   // 必须用取模后的游标，否则越界会画成空白页
@@ -640,6 +642,7 @@ static void handle_cmd(const char *raw) {
     if (s_mode != 2 && cam_active()) cam_end();   // 离开照相就释放摄像头（PSRAM 很贵）
     if (s_mode == 1) sys_snapshot_draw();
     else if (s_mode == 2) {
+      cam_end();                      // 先彻底复位，再起，避免上次残留监听
       if (cam_begin()) {
         Serial.printf("[MODE] cam 启动成功 ip=%s\n", WiFi.localIP().toString().c_str());
         ui_force_redraw();         // 重设旋转+清屏，别重建总线（会把反显/旋转丢掉）
