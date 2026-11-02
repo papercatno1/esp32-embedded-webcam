@@ -44,7 +44,12 @@ static void bl_apply() {
 // 探完卡调这个：重配总线 + 重发 LCD 初始化序列
 void ui_force_redraw() {
   if (!s_gfx) return;
+  // 挂卡时 SPIClass::begin() 会重配 FSPI，面板的 MADCTL/INVON 可能已经丢了：
+  // setRotation() 在 rotation 没变时是空操作，所以先切 0 再切 1，强制把 MADCTL 重发一遍，
+  // 并补一次 INVON（这颗模组必须反显），最后整屏清黑。
+  s_gfx->setRotation(0);
   s_gfx->setRotation(1);
+  s_gfx->invertDisplay(true);
   fill_black(s_gfx);
 }
 

@@ -1,6 +1,10 @@
 package com.papercatno1.notepad
 
 import android.annotation.SuppressLint
+import android.app.AlertDialog
+import android.app.DownloadManager
+import android.net.Uri
+import android.os.Environment
 import android.content.Context
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
@@ -8,6 +12,9 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.webkit.JsResult
+import android.webkit.WebChromeClient
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.webkit.WebResourceError
@@ -47,7 +54,7 @@ class WebCamActivity : ComponentActivity() {
                 if (ok) {
                     logD("设备网页已就绪，加载")
                     s_retry = 0
-                    web.loadUrl("http://$ip:8080/")
+                    web.loadUrl("http://$ip:8080/?t=" + System.currentTimeMillis())
                 } else if (n < 20) {
                     logD("设备网页未就绪 ${n + 1}/20")
                     web.postDelayed({ probeThenLoad(web, ip, n + 1) }, 800)
@@ -74,6 +81,45 @@ class WebCamActivity : ComponentActivity() {
 
         web = WebView(this)
         web.settings.javaScriptEnabled = true
+        // 每次都取设备上的最新页面，避免 WebView 缓存让人看不到新功能
+        web.settings.cacheMode = WebSettings.LOAD_NO_CACHE
+        web.settings.domStorageEnabled = true
+        web.clearCache(true)
+
+        // 页面里 confirm() 需要 WebChromeClient 才会弹窗，否则点「删除」没反应
+        web.webChromeClient = object : WebChromeClient() {
+            override fun onJsConfirm(
+                view: WebView?, url: String?, message: String?, result: JsResult?
+            ): Boolean {
+                if (result == null) return false
+                AlertDialog.Builder(this@WebCamActivity)
+                    .setMessage(message)
+                    .setPositiveButton("确定") { _, _ -> result.confirm() }
+                    .setNegativeButton("取消") { _, _ -> result.cancel() }
+                    .setOnCancelListener { result.cancel() }
+                    .show()
+                return true
+            }
+        }
+
+        // 卡内照片「下载」走 Content-Disposition 附件，交给系统下载管理器保存到「下载」
+        web.setDownloadListener { url, _, contentDisposition, _, _ ->
+            try {
+                val name = contentDisposition
+                    ?.substringAfter("filename=\"", "")
+                    ?.substringBefore("\"")
+                    ?.takeIf { it.isNotEmpty() }
+                    ?: ("esp32cam_" + System.currentTimeMillis() + ".jpg")
+                val req = DownloadManager.Request(Uri.parse(url))
+                    .setTitle(name)
+                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
+                (getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(req)
+                runOnUiThread { logD("开始下载 " + name + "（通知栏可见进度）") }
+            } catch (e: Exception) {
+                runOnUiThread { logD("下载失败：" + e.message) }
+            }
+        }
         web.webViewClient = object : WebViewClient() {
             override fun onReceivedError(v: WebView, req: WebResourceRequest, err: WebResourceError) {
                 if (!req.isForMainFrame) return
