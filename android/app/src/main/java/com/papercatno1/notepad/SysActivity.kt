@@ -19,6 +19,7 @@ class SysActivity : ComponentActivity() {
     private lateinit var logWrap: ScrollView
 
     private val permReq = 1
+    private var invState = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,6 +34,14 @@ class SysActivity : ComponentActivity() {
 
         findViewById<Button>(R.id.btnConnect).setOnClickListener { ensurePerms() }
         findViewById<Button>(R.id.btnRefresh).setOnClickListener { askSys() }
+        // 屏幕白底黑字就是反显状态，点一下切过去看哪个对
+        findViewById<Button>(R.id.btnInv).setOnClickListener {
+            if (!ble.connected) { toast("还没连上设备，先点「扫描连接」"); return@setOnClickListener }
+            invState = 1 - invState
+            ble.send("INV $invState")
+            toast(if (invState == 1) "已发 INV 1（打开反显）" else "已发 INV 0（关闭反显）")
+        }
+
         findViewById<Button>(R.id.btnSysScreen).setOnClickListener {
             if (!ble.connected) { toast("还没连上设备，先点「扫描连接」"); return@setOnClickListener }
             ble.send("MODE sys")

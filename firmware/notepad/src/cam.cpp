@@ -252,7 +252,9 @@ bool cam_begin() {
   Serial.printf("[CAM] PID=0x%02X 图像 %s\n", s->id.PID, s_res);
 
   if (!s_mtx) s_mtx = xSemaphoreCreateMutex();
+  s_srv.setNoDelay(true);
   s_srv.begin();
+  Serial.printf("[CAM] 8080 监听, IP=%s\n", WiFi.localIP().toString().c_str());
   s_srv.setNoDelay(true);
   s_on = true;
   s_fps = 0; s_frames = 0; s_viewers = 0; s_last_frame_ms = 0;

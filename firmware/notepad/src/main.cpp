@@ -23,6 +23,7 @@
 // M2：一段时间无交互自动熄屏（背光关），敲一下板子（QMI8658 加速度突变）点亮。
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <esp_http_server.h>
@@ -397,7 +398,17 @@ static volatile bool s_need_show = false;
 static void do_show(int idx) {
   notes_set_cursor(idx);          // 内部按条数取模
   if (notes_count() == 0) {
-    ui_show_empty();              // 只有一条都没有时才显示「等待推送」
+    // 开机先画固定欢迎页（不再显示上次的票据）
+  {
+    Preferences pk;
+    if (pk.begin("noteapp")) {
+      int inv = pk.getInt("inv", 0);
+      ui_set_invert(inv);
+      pk.end();
+    }
+  }
+  ui_show_splash(FW_VERSION);
+  ui_show_empty();              // 只有一条都没有时才显示「等待推送」
     return;
   }
   ui_show_note(notes_cursor());   // 必须用取模后的游标，否则越界会画成空白页
@@ -626,10 +637,11 @@ static void handle_cmd(const char *raw) {
       else if (!strcasecmp(arg, "sys")) s_mode = 1;
       else if (!strcasecmp(arg, "cam")) s_mode = 2;
     }
-    if (s_mode != 2) cam_end();       // 离开照相就释放摄像头（PSRAM 很贵）
+    if (s_mode != 2 && cam_active()) cam_end();   // 离开照相就释放摄像头（PSRAM 很贵）
     if (s_mode == 1) sys_snapshot_draw();
     else if (s_mode == 2) {
       if (cam_begin()) {
+        Serial.printf("[MODE] cam 启动成功 ip=%s\n", WiFi.localIP().toString().c_str());
         ui_bus_recover();          // 摄像头初始化会碰 LEDC/引脚，屏幕总线重来一次更稳
         char u[48];
         snprintf(u, sizeof(u), "http://%s:8080/", cur_ip().toString().c_str());
@@ -643,6 +655,17 @@ static void handle_cmd(const char *raw) {
     else ui_show_empty();
     char o[32];
     snprintf(o, sizeof(o), "OK MODE %s", s_mode == 1 ? "sys" : (s_mode == 2 ? "cam" : "note"));
+    ble_send(o);
+  } else if (!strcmp(cmd, "INV")) {
+    // 不带参数=查询；带 0/1 设置反显（白底黑字 → 发 INV 1 或 INV 0 试哪个对）
+    static int s_inv = 0;
+    if (arg) s_inv = atoi(arg) ? 1 : 0;
+    ui_set_invert(s_inv);
+    { Preferences pk; if (pk.begin("noteapp")) { pk.putInt("inv", s_inv); pk.end(); } }
+    if (s_mode == 1) sys_snapshot_draw();
+    else if (s_mode == 0) { if (notes_count() > 0) ui_show_note(notes_cursor()); else ui_show_empty(); }
+    char o[24];
+    snprintf(o, sizeof(o), "OK INV %d", s_inv);
     ble_send(o);
   } else if (!strcmp(cmd, "SYS")) {
     char o[224];

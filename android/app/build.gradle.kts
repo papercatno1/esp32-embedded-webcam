@@ -11,8 +11,8 @@ android {
         applicationId = "com.papercatno1.notepad"
         minSdk = 26
         targetSdk = 34
-        versionCode = 11
-        versionName = "0.6.2"
+        versionCode = 12
+        versionName = "0.6.3"
     }
 
     buildTypes {

@@ -40,6 +40,26 @@ static void bl_apply() {
 
 // SD 卡探测会把 SCK/MOSI 的引脚复用抢走，屏幕就会花屏；
 // 探完卡调这个：重配总线 + 重发 LCD 初始化序列
+void ui_show_splash(const char *ver) {
+  if (!s_gfx) return;
+  s_gfx->setRotation(1);
+  s_gfx->fillScreen(C_BG);
+  // 简单图案：一个「百宝箱」+ 向上箭头，箭头逐帧上移
+  for (int f = 0; f < 6; f++) {
+    s_gfx->fillRect(0, 0, 320, 240, C_BG);
+    cjk_draw(s_gfx, 40, 52, "ESP-32 百宝箱", C_TITLE, -1, CJK_L);
+    cjk_draw(s_gfx, 40, 92, "ESP32-S3 · 16MB · 8MB PSRAM", C_DIM, -1, CJK_S);
+    int bx = 130, by = 150;
+    s_gfx->drawRect(bx, by, 60, 34, C_ACCENT);
+    s_gfx->drawFastHLine(bx, by + 12, 60, C_ACCENT);
+    s_gfx->drawFastVLine(bx + 30, by, 12, C_ACCENT);
+    for (int i = 0; i < 5; i++) s_gfx->drawFastHLine(bx + 12 + i * 3, by - 18 - f * 6 - i * 4, 36 - i * 6, C_TEXT);
+    cjk_draw(s_gfx, 40, 200, "开机中…", C_DIM, -1, CJK_S);
+    delay(70);
+  }
+  if (ver) cjk_draw(s_gfx, 210, 200, ver, C_DIM, -1, CJK_S);
+}
+
 void ui_bus_recover() {
   if (!s_bus || !s_gfx) return;
   s_bus->begin();
@@ -57,7 +77,7 @@ void ui_begin() {
   s_bus = new Arduino_ESP32SPI(42 /*DC*/, 45 /*CS*/, 39 /*SCK*/, 38 /*MOSI*/,
                                GFX_NOT_DEFINED /*MISO*/);
   s_gfx = new Arduino_ST7789(s_bus, GFX_NOT_DEFINED /*RST*/, 1 /*横屏*/,
-                             true /*IPS*/, 240, 320);
+                             false /*IPS 关掉，否则反显*/, 240, 320);
   if (!s_gfx->begin(40000000)) {
     Serial.println("[LCD] 初始化失败");
     delete s_gfx;
@@ -66,6 +86,14 @@ void ui_begin() {
 }
 
 bool ui_ready() { return s_gfx != nullptr; }
+
+// ST7789 的反显开关：IPS 屏有的需要 INVON，有的必须 INVOFF。
+// 白底黑字就是反显状态，用 INV 指令切换。
+void ui_set_invert(int on) {
+  if (!s_gfx) return;
+  s_gfx->invertDisplay(on != 0);
+  Serial.printf("[LCD] 反显 = %d\n", on ? 1 : 0);
+}
 
 void ui_backlight(int pct) {
   if (pct < 5) pct = 5;
