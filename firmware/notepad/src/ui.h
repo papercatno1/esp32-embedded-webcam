@@ -11,6 +11,7 @@ void ui_set_invert(int on);
 // 显示第 idx 条；-1 表示按 notes_cursor()
 void ui_show_note(int idx);
 void ui_show_empty();
+void ui_force_redraw();
 void ui_show_splash(const char *ver);
 void ui_message(const char *l1, const char *l2 = nullptr, const char *l3 = nullptr);
 void ui_progress(int pct, const char *title);   // OTA/联网进度

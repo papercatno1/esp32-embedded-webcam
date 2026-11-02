@@ -40,6 +40,12 @@ static void bl_apply() {
 
 // SD 卡探测会把 SCK/MOSI 的引脚复用抢走，屏幕就会花屏；
 // 探完卡调这个：重配总线 + 重发 LCD 初始化序列
+void ui_force_redraw() {
+  if (!s_gfx) return;
+  s_gfx->setRotation(1);
+  s_gfx->fillScreen(C_BG);
+}
+
 void ui_show_splash(const char *ver) {
   if (!s_gfx) return;
   s_gfx->setRotation(1);

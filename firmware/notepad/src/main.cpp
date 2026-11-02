@@ -408,7 +408,7 @@ static void do_show(int idx) {
     }
   }
   ui_show_splash(FW_VERSION);
-  ui_show_empty();              // 只有一条都没有时才显示「等待推送」
+  ui_show_empty();
     return;
   }
   ui_show_note(notes_cursor());   // 必须用取模后的游标，否则越界会画成空白页
@@ -642,7 +642,7 @@ static void handle_cmd(const char *raw) {
     else if (s_mode == 2) {
       if (cam_begin()) {
         Serial.printf("[MODE] cam 启动成功 ip=%s\n", WiFi.localIP().toString().c_str());
-        ui_bus_recover();          // 摄像头初始化会碰 LEDC/引脚，屏幕总线重来一次更稳
+        ui_force_redraw();         // 重设旋转+清屏，别重建总线（会把反显/旋转丢掉）
         char u[48];
         snprintf(u, sizeof(u), "http://%s:8080/", cur_ip().toString().c_str());
         ui_message("照相模式", u, "手机浏览器打开 (MODE note 退出)");
