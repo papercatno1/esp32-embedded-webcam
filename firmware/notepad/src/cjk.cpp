@@ -132,3 +132,35 @@ int cjk_width(const char *s, CjkSize sz) {
   }
   return w;
 }
+
+int cjk_draw_scale(Arduino_GFX *g, int x, int y, const char *s, uint16_t color,
+                   int scale, CjkSize sz) {
+  if (!g || !s || scale < 1) return 0;
+  const Font *f = &s_font[sz];
+  const int fallback = f->ok ? f->gw : 8;
+  int cx = x;
+  while (*s) {
+    uint32_t cp = 0;
+    if (!cjk_next(&s, &cp)) break;
+    const uint8_t *r = find_glyph(f, cp);
+    if (!r) { cx += (cjk_advance(sz, cp) ? cjk_advance(sz, cp) : fallback) * scale; continue; }
+    int step = r[4] ? r[4] : f->gw;
+    const uint8_t *bmp = r + 8;
+    for (int row = 0; row < f->gh; row++) {
+      const uint8_t *line = bmp + row * f->row_bytes;
+      int col = 0;
+      while (col < f->gw) {
+        if (line[col >> 3] & (0x80 >> (col & 7))) {
+          int start = col;
+          while (col < f->gw && (line[col >> 3] & (0x80 >> (col & 7)))) col++;
+          g->fillRect(cx + start * scale, y + row * scale,
+                      (col - start) * scale, scale, color);
+        } else {
+          col++;
+        }
+      }
+    }
+    cx += step * scale;
+  }
+  return cx - x;
+}

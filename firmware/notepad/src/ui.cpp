@@ -49,26 +49,29 @@ void ui_force_redraw() {
 void ui_show_splash(const char *ver) {
   if (!s_gfx) return;
   s_gfx->setRotation(1);
-  s_gfx->fillScreen(C_BG);
+  s_gfx->fillScreen(0x0000);          // 黑底
 
-  // 大标题：ESP-32 百宝箱（居中）
+  // 大标题：ESP-32 百宝箱（24px 字形放大 2 倍 = 48px，白字）
   const char *t1 = "ESP-32";
   const char *t2 = "百宝箱";
-  int w1 = cjk_width(t1, CJK_L), w2 = cjk_width(t2, CJK_L);
-  int x = (320 - (w1 + w2 + 8)) / 2;
-  cjk_draw(s_gfx, x, 66, t1, C_TITLE, -1, CJK_L);
-  cjk_draw(s_gfx, x + w1 + 8, 66, t2, C_TITLE, -1, CJK_L);
+  int w1 = cjk_width(t1, CJK_L) * 2, w2 = cjk_width(t2, CJK_L) * 2;
+  int gap = 12;
+  int x = (320 - (w1 + w2 + gap)) / 2;
+  if (x < 4) x = 4;
+  int y = 52;
+  cjk_draw_scale(s_gfx, x, y, t1, 0xFFFF, 2, CJK_L);
+  cjk_draw_scale(s_gfx, x + w1 + gap, y, t2, 0xFFFF, 2, CJK_L);
 
-  // 版本号
+  // 版本号（24px）
   if (ver) {
-    int wv = cjk_width(ver, CJK_S);
-    cjk_draw(s_gfx, (320 - wv) / 2, 116, ver, C_DIM, -1, CJK_S);
+    int wv = cjk_width(ver, CJK_L);
+    cjk_draw(s_gfx, (320 - wv) / 2, 118, ver, C_TEXT, -1, CJK_L);
   }
 
-  // 署名
+  // 署名（16px）
   const char *by = "powered by papercat";
   int wb = cjk_width(by, CJK_S);
-  cjk_draw(s_gfx, (320 - wb) / 2, 150, by, C_ACCENT, -1, CJK_S);
+  cjk_draw(s_gfx, (320 - wb) / 2, 162, by, C_ACCENT, -1, CJK_S);
 }
 
 void ui_bus_recover() {

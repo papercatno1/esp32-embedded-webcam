@@ -30,6 +30,10 @@ int cjk_line_height(CjkSize sz);
 int cjk_draw(Arduino_GFX *g, int x, int y, const char *s, uint16_t color,
              int maxx = -1, CjkSize sz = CJK_L);
 
+// 按 scale 倍放大绘制（用于欢迎页大标题）
+int cjk_draw_scale(Arduino_GFX *g, int x, int y, const char *s, uint16_t color,
+                   int scale = 2, CjkSize sz = CJK_L);
+
 // 整串像素宽度（不截断）
 int cjk_width(const char *s, CjkSize sz = CJK_L);
 

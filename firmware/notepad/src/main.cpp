@@ -39,7 +39,7 @@
 #include "power.h"
 #include "cam.h"
 
-#define FW_VERSION "0.4.3"
+#define FW_VERSION "0.4.4"
 
 // ---------------- BLE ----------------
 #define NUS_SVC "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -120,7 +120,14 @@ static void sys_snapshot_draw() {
   else snprintf(sd, sizeof(sd), "未挂载");
   si.ver      = FW_VERSION;
   si.mode     = "原生";
-  si.wifi     = wifi;
+  static char wifi_buf[40];
+  if (WiFi.status() == WL_CONNECTED)
+    snprintf(wifi_buf, sizeof(wifi_buf), "已连 %s", WiFi.localIP().toString().c_str());
+  else if (WiFi.getMode() == WIFI_AP)
+    snprintf(wifi_buf, sizeof(wifi_buf), "热点 %s", WiFi.softAPIP().toString().c_str());
+  else
+    snprintf(wifi_buf, sizeof(wifi_buf), "未连");
+  si.wifi     = wifi_buf;
   si.ble      = s_ble_conn ? "已连" : "广播中";
   si.sdcard   = sd;
   si.psram_mb = (int)(ESP.getPsramSize() / (1024 * 1024));
@@ -373,7 +380,6 @@ static void wifi_begin() {
     return;
   }
   WiFi.begin(WIFI_SSID, WIFI_PASS);
-  ui_message("连接 Wi-Fi…", WIFI_SSID);
   uint32_t t0 = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - t0 < 15000) {
     delay(200);
