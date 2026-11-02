@@ -59,15 +59,59 @@ static bool s_img_on_sd = false;
 
 static fs::FS &img_fs() { return s_img_on_sd ? (fs::FS &)SD : (fs::FS &)FFat; }
 
+static void img_path(int id, char *buf, size_t cap);   // 下面才定义
+
 void notes_refresh_img_fs() {
   bool ok = (SD.cardType() != CARD_NONE);
-  if (ok) {                                   // 挂得上不代表写得了（exFAT 卡在 FatFs 下常常只读）
-    File t = SD.open("/_wtest", "w");
-    if (t) { t.print("x"); t.close(); SD.remove("/_wtest"); }
-    else ok = false;
+  // 卡上已经有我们的索引 = 上次确实写成功过，直接信它（开机后第一次写测试容易误判）
+  if (ok && SD.exists(kImgIdx)) {
+    s_img_on_sd = true;
+    Serial.println("[IMG] 图片存放：TF 卡（索引已在）");
+    return;
+  }
+  if (ok) {                                   // 挂得上不代表写得了；刚挂上时头一两次可能失败，重试几次
+    bool wr = false;
+    for (int i = 0; i < 3 && !wr; i++) {
+      File t = SD.open("/_wtest", "w");
+      if (t) { t.print("x"); t.close(); wr = SD.exists("/_wtest"); SD.remove("/_wtest"); }
+      if (!wr) delay(120);
+    }
+    ok = wr;
   }
   s_img_on_sd = ok;
   Serial.printf("[IMG] 图片存放：%s\n", s_img_on_sd ? "TF 卡" : "内部 FFat");
+
+  // 从 FFat 迁到卡：卡上没有索引、而内部有 → 把索引和每张图拷过去（一次性）
+  if (s_img_on_sd && !SD.exists(kImgIdx) && FFat.exists(kImgIdx)) {
+    File src = FFat.open(kImgIdx, "r");
+    File dst = SD.open(kImgIdx, "w");
+    if (src && dst) {
+      int moved = 0;
+      while (src.available()) {
+        String line = src.readStringUntil('\n');
+        if (line.endsWith("\r")) line.remove(line.length() - 1);
+        if (!line.startsWith("# ")) continue;
+        int id = 0, w = 0, h = 0, rlen = 0;
+        if (sscanf(line.c_str() + 2, "%d %d %d %d", &id, &w, &h, &rlen) != 4) continue;
+        char path[24];
+        img_path(id, path, sizeof(path));
+        File g = FFat.open(path, "r");
+        if (!g) continue;
+        uint8_t *buf = (uint8_t *)malloc(rlen + 4);
+        if (!buf) { g.close(); continue; }
+        size_t got = g.read(buf, rlen + 4);
+        g.close();
+        if (got == (size_t)(rlen + 4)) {
+          File o = SD.open(path, "w");
+          if (o) { o.write(buf, got); o.close(); dst.println(line); moved++; }
+        }
+        free(buf);
+      }
+      dst.close();
+      Serial.printf("[IMG] 已从内部迁到卡：%d 张\n", moved);
+    }
+    if (src) src.close();
+  }
 }
 
 const char *notes_img_fs_name() { return s_img_on_sd ? "sd" : "ffat"; }
@@ -240,6 +284,7 @@ bool notes_begin() {
     f.close();
   }
   int n_text = s_n;
+  notes_refresh_img_fs();   // FFat 已经挂上了，这时候才可能把内部图片迁到卡
   load_images();
   Serial.printf("[NOTE] 载入 文本 %d 条 / 图片 %d 张\n", n_text, notes_img_count());
   return true;

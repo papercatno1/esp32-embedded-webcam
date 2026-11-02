@@ -37,7 +37,7 @@
 #include "qmi8658.h"
 #include "power.h"
 
-#define FW_VERSION "0.3.4"
+#define FW_VERSION "0.3.5"
 
 // ---------------- BLE ----------------
 #define NUS_SVC "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -555,7 +555,10 @@ static void handle_cmd(const char *raw) {
   } else if (!strcmp(cmd, "M")) {
     // 看 TF 卡：第一次会现场挂载（探测会扰动 SPI，之后重画一帧自愈）
     char o[96];
-    bool ok = s_sd_ok || sd_probe();
+    SD.end();                 // 先彻底卸掉，保证这次是干净的挂载
+    s_sd_ok = false;
+    s_sd_hi_done = false;
+    bool ok = sd_probe();
     if (!ok) {
       snprintf(o, sizeof(o), s_sd_present ? "ERR NOFAT" : "ERR NOCARD");
     } else {
@@ -567,9 +570,12 @@ static void handle_cmd(const char *raw) {
       File tf = SD.open("/_t.txt", "w");
       if (tf) { tf.print("x"); tf.close(); wr = SD.exists("/_t.txt"); SD.remove("/_t.txt"); }
       snprintf(o, sizeof(o), "OK M %s %llu w=%d", tn, (unsigned long long)s_sd_mb, wr ? 1 : 0);
-      notes_refresh_img_fs();
     }
     s_sd_probed = true;
+    SD.end();                 // 用完就卸，别让它长期跟 LCD 抢总线
+    s_sd_ok = false;
+    s_sd_hi_done = false;
+    notes_refresh_img_fs();   // 卸掉之后重新判定：卡不在了就回落内部 FFat
     ui_bus_recover();
     ble_send(o);
     if (notes_count() > 0) ui_show_note(notes_cursor()); else ui_show_empty();
@@ -595,8 +601,14 @@ void setup() {
 
   // TF 卡必须在 LCD 之前挂：SD 与 LCD 共用 SCK(39)/MOSI(38)，
   // 谁后初始化谁把总线拿走 —— LCD 先初始化就会被 SD 弄成花屏。
+  // 开机先挂 TF 卡（必须在 LCD 初始化之前：SD 与 LCD 共用 SCK(39)/MOSI(38)，
+  // 谁后初始化谁把总线拿走 —— LCD 先初始化就会被 SD 弄成花屏）
   ui_begin();
   cjk_init();
+
+  // 开机不挂 TF 卡：它与 LCD 共用 SCK(39)/MOSI(38)，同时挂着会互相抢总线
+  // （实测：挂上后 LCD 一初始化，卡就掉线，cardType() 变 CARD_NONE）。
+  // 需要卡的时候用 M 指令"临时挂载 → 读写 → 卸载 → 恢复 LCD 总线"。
   boolean ok = notes_begin();
   Serial.printf("[NOTE] 存储 %s\n", ok ? "可用" : "不可用");
 
