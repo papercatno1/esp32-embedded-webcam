@@ -1,3 +1,23 @@
+## v0.10.4（固件 0.4.12 / App 0.6.8：照相页相册 + 挂卡后不画屏）
+
+**照相页新增「卡内照片」**
+- 固件端点：`GET /list`（JSON 文件名+字节数）、`GET /photo?n=xxx.jpg`（带 `Content-Disposition`、1KB 分块发送）、`GET /del?n=xxx.jpg`
+- 文件名白名单 `photo_name_ok()`：禁 `/`、`..`、反斜杠，长度 5..28，后缀必须是 `.jpg`
+- 网页内联相册：列表 + 「下载」+「删除」（删除走 `confirm()`，由 App 的 `onJsConfirm` 弹原生确认框）
+
+**手手下载不触发 WebView 下载管道 → 改走 App 接口**
+- `web.addJavascriptInterface(Saver(this), "ESP32Saver")`；`save(name, b64)` 解码后写 `MediaStore.Downloads`（Android 10+，无需存储权限），低版本写 `Download/`
+- 按钮文案「下载中」→「下载」，页面绿色提示区回显保存路径与字节数
+
+**路由 bug：`GET /?t=...` 不匹配**
+- 防缓存参数导致 `GET /?t=1` 既不匹配 `"GET / "` 也不匹配 `"GET /index"` → 空响应 → 白屏；路由改为同时匹配 `"GET /?"`
+
+**挂卡后禁止写显存**
+- `sd_probe()` 里的 `s_sd_spi.begin()` 重配 FSPI 之后再写显存会出现「左黑右白、黑字」的半屏错位
+- 开机挂卡分支只做 `notes_refresh_img_fs()`，不再 `ui_reinit_panel()` / `ui_force_redraw()`，屏幕保留挂卡前那一帧
+
+---
+
 # 更新记录
 
 ## 0.7.7（固件 0.3.6：TF 卡与 LCD 真正共存）

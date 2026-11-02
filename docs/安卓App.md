@@ -127,3 +127,17 @@ android/
 3. 看设备 `/status.json` 的 `rx`（收到几条指令）、`lc`（最后一条指令）、`lr`（最后一条回执）
    —— `rx` 涨了说明指令到了设备，`lr` 有内容说明设备回了，问题就在手机侧
 4. BLE 有回执写同一时刻只能一条在飞，App 已用队列串行化；若仍异常，先点「重连」重置状态
+
+## 照相系统：拍照、看卡内照片、下载、删除
+
+页面全部在设备的 8080 端口上（App 只是一个 WebView 外壳）：
+
+- 「拍一张存卡」→ `GET /shot`，照片落在 TF 卡根目录 `/camNNNN.jpg`
+- 「卡内照片」→ `GET /list` 拉列表，同一页展开，含文件名与大小
+- 「下载」→ JS 取字节后交给 App：`window.ESP32Saver.save(name, base64)`，写入手机「下载」目录
+  （Android 10+ 走 `MediaStore.Downloads`，无需存储权限），完成后页面回显保存路径
+- 「删除」→ `GET /del?n=NAME`，确认框由 App 的 `WebChromeClient.onJsConfirm` 弹原生对话框
+
+**注意**：0.6.7 及更早版本用的是 `setDownloadListener` + DownloadManager，实测不触发——
+文件其实已经落盘（在「下载」目录里能看到），但页面没有任何反馈，容易被当成"点了没反应"。
+从 0.6.8 起统一走 `ESP32Saver`，按钮会显示「下载中」并在页面上回执。
