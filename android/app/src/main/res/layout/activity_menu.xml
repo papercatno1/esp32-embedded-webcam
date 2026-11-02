@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:padding="16dp">
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="ESP32 设备控制台"
+        android:textSize="22sp"
+        android:textStyle="bold"
+        android:paddingBottom="4dp" />
+
+    <TextView
+        android:id="@+id/tvHint"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="选择要进入的功能"
+        android:textSize="13sp"
+        android:paddingBottom="14dp" />
+
+    <Button
+        android:id="@+id/btnSys"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:text="① 原生系统（系统信息）" />
+
+    <Button
+        android:id="@+id/btnCam"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:layout_marginTop="10dp"
+        android:text="② 照相系统" />
+
+    <Button
+        android:id="@+id/btnNote"
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        android:layout_marginTop="10dp"
+        android:text="③ 票据屏" />
+</LinearLayout>

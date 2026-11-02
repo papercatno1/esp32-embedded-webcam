@@ -37,7 +37,7 @@
 #include "qmi8658.h"
 #include "power.h"
 
-#define FW_VERSION "0.3.6"
+#define FW_VERSION "0.4.0"
 
 // ---------------- BLE ----------------
 #define NUS_SVC "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -96,6 +96,41 @@ static uint64_t s_sd_mb = 0;
 static bool     s_sd_hi_done = false;
 static bool     s_sd_present = false;
 static bool     s_sd_probed  = false;
+
+// ---------------- 工作模式 ----------------
+// 0 = 票据屏（note）  1 = 原生系统信息（sys）
+static int      s_mode = 0;
+static uint32_t s_sys_next = 0;
+
+static const char *mode_name(int m) { return m == 1 ? "sys" : "note"; }
+
+static void sys_snapshot_draw() {
+  SysInfo si = {};
+  char wifi[40]; 
+  if (WiFi.status() == WL_CONNECTED) {
+    IPAddress ip = WiFi.localIP();
+    snprintf(wifi, sizeof(wifi), "已连 %u.%u.%u.%u", ip[0], ip[1], ip[2], ip[3]);
+  } else {
+    snprintf(wifi, sizeof(wifi), "未连");
+  }
+  char sd[24];
+  if (s_sd_ok && s_sd_mb) snprintf(sd, sizeof(sd), "%llu MB", (unsigned long long)s_sd_mb);
+  else snprintf(sd, sizeof(sd), "未挂载");
+  si.ver      = FW_VERSION;
+  si.mode     = "原生";
+  si.wifi     = wifi;
+  si.ble      = s_ble_conn ? "已连" : "广播中";
+  si.sdcard   = sd;
+  si.psram_mb = (int)(ESP.getPsramSize() / (1024 * 1024));
+  si.flash_mb = (int)(ESP.getFlashChipSize() / (1024 * 1024));
+  si.batt_mv  = (int)(analogReadMilliVolts(5) * 2);   // 板上 1/2 分压
+  si.temp_c   = (int)temperatureRead();
+  si.heap_kb  = ESP.getFreeHeap() / 1024;
+  si.up_s     = millis() / 1000;
+  si.notes    = notes_count();
+  ui_show_sys(si);
+  s_sys_next = millis() + 3000;   // 每 3 秒自己刷一次
+}
 
 // 低层探一下：只发 CMD0，看卡在不在（区分"没卡"和"卡在但格式不认"）
 static bool sd_card_present() {
@@ -246,7 +281,7 @@ static esp_err_t h_status(httpd_req_t *req) {
            "{\"ver\":\"" FW_VERSION "\",\"up\":%lu,\"heap\":%u,\"wifi\":\"%s\","
            "\"ip\":\"%s\",\"rssi\":%d,\"ble\":%d,\"mtu\":%d,\"notes\":%d,\"cur\":%d,"
            "\"bl\":%d,\"ot\":%lu,\"imu\":%d,\"idle\":%lu,\"rx\":%lu,\"sw\":%lu,"
-           "\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d,\"sd\":%d,\"sdm\":%llu,\"ifs\":\"%s\",\"lc\":\"%s\",\"lr\":\"%s\",\"iw\":%d,\"ih\":%d,\"il\":%u,\"isz\":%u,\"bk\":%u,\"fl\":%u}",
+           "\"mode\":%d,\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d,\"sd\":%d,\"sdm\":%llu,\"ifs\":\"%s\",\"lc\":\"%s\",\"lr\":\"%s\",\"iw\":%d,\"ih\":%d,\"il\":%u,\"isz\":%u,\"bk\":%u,\"fl\":%u}",
            (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            (WiFi.getMode() == WIFI_AP) ? "ap" : "sta",
            cur_ip().toString().c_str(),
@@ -258,7 +293,7 @@ static esp_err_t h_status(httpd_req_t *req) {
            (unsigned long)(power_idle_ms() / 1000),
            (unsigned long)s_cmd_rx,
            (unsigned long)power_swipe_count(),
-           power_last_swipe_deg(), power_last_swipe_axis(),
+           s_mode, power_last_swipe_deg(), power_last_swipe_axis(),
            power_last_mag(), power_peak_mag(), power_get_swipe_sign(),
            s_sd_ok ? 1 : 0, (unsigned long long)s_sd_mb, notes_img_fs_name(),
            s_last_cmd, s_last_rep, s_img_w, s_img_h, (unsigned)s_img_len,
@@ -582,6 +617,31 @@ static void handle_cmd(const char *raw) {
     }
     char o[32];
     snprintf(o, sizeof(o), "OK K %d", power_get_swipe_sign());
+    ble_send(o);
+  } else if (!strcmp(cmd, "MODE")) {
+    if (arg) {
+      if (!strcasecmp(arg, "sys")) s_mode = 1;
+      else if (!strcasecmp(arg, "note")) s_mode = 0;
+      else if (!strcasecmp(arg, "cam")) s_mode = 2;   // 照相模式还在合并中
+    }
+    if (s_mode == 1) sys_snapshot_draw();
+    else if (s_mode == 2) ui_message("照相模式", "固件合并中", "敬请期待");
+    else if (notes_count() > 0) ui_show_note(notes_cursor());
+    else ui_show_empty();
+    char o[32];
+    snprintf(o, sizeof(o), "OK MODE %s", s_mode == 1 ? "sys" : (s_mode == 2 ? "cam" : "note"));
+    ble_send(o);
+  } else if (!strcmp(cmd, "SYS")) {
+    char o[192];
+    snprintf(o, sizeof(o),
+             "OK SYS ver=%s mode=%s psram=%dMB flash=%dMB tf=%lluMB bat=%d.%02dV temp=%dC heap=%luKB wifi=%d ble=%d up=%lus notes=%d",
+             FW_VERSION, mode_name(s_mode),
+             (int)(ESP.getPsramSize() / (1024 * 1024)), (int)(ESP.getFlashChipSize() / (1024 * 1024)),
+             (unsigned long long)s_sd_mb, (int)(analogReadMilliVolts(5) * 2) / 1000,
+             ((int)(analogReadMilliVolts(5) * 2) % 1000) / 10,
+             (int)temperatureRead(), (unsigned long)(ESP.getFreeHeap() / 1024),
+             WiFi.status() == WL_CONNECTED ? 1 : 0, s_ble_conn ? 1 : 0,
+             (unsigned long)(millis() / 1000), notes_count());
     ble_send(o);
   } else if (cmd[0]) {
     ble_send("ERR UNKNOWN");

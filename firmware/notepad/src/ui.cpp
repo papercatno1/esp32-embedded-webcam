@@ -271,3 +271,38 @@ void ui_progress(int pct, const char *title) {
   snprintf(b, sizeof(b), "%d%%", pct);
   cjk_draw(s_gfx, 140, 140, b, C_TEXT, -1, CJK_L);
 }
+
+// ---------------- 系统信息页 ----------------
+static void sys_row(int y, const char *k, const char *v) {
+  cjk_draw(s_gfx, 8, y, k, C_DIM, -1, CJK_S);
+  int vw = cjk_width(v, CJK_S);
+  cjk_draw(s_gfx, 312 - vw, y, v, C_TEXT, -1, CJK_S);
+}
+
+void ui_show_sys(const SysInfo &si) {
+  if (!s_gfx) return;
+  s_gfx->fillScreen(C_BG);
+  s_gfx->fillRect(0, 0, 320, TITLE_H, C_BAR);
+  cjk_draw(s_gfx, 6, 5, "系统信息", C_TITLE, -1, CJK_L);
+  cjk_draw(s_gfx, 270, 9, si.mode ? si.mode : "原生", C_ACCENT, -1, CJK_S);
+
+  char vb[32];
+  const int y0 = 38, lh = 17;   // 10 行压到页脚线(212)以上
+  sys_row(y0 + lh * 0, "芯片", "ESP32-S3");
+  snprintf(vb, sizeof(vb), "%d MB", si.psram_mb);   sys_row(y0 + lh * 1, "PSRAM", vb);
+  snprintf(vb, sizeof(vb), "%d MB", si.flash_mb);   sys_row(y0 + lh * 2, "FLASH", vb);
+  sys_row(y0 + lh * 3, "TF 卡", si.sdcard);
+  snprintf(vb, sizeof(vb), "%d.%02d V", si.batt_mv / 1000, (si.batt_mv % 1000) / 10);
+  sys_row(y0 + lh * 4, "电池", vb);
+  snprintf(vb, sizeof(vb), "%d C", si.temp_c);      sys_row(y0 + lh * 5, "芯片温度", vb);
+  snprintf(vb, sizeof(vb), "%lu KB", (unsigned long)si.heap_kb); sys_row(y0 + lh * 6, "可用内存", vb);
+  snprintf(vb, sizeof(vb), "%lus", (unsigned long)si.up_s);      sys_row(y0 + lh * 7, "已运行", vb);
+  sys_row(y0 + lh * 8, "WiFi", si.wifi);
+  snprintf(vb, sizeof(vb), "%s %d条", si.ble, si.notes);         sys_row(y0 + lh * 9, "蓝牙/消息", vb);
+
+  s_gfx->drawFastHLine(0, FOOT_LINE, 320, C_BAR);
+  char foot[48];
+  snprintf(foot, sizeof(foot), "固件 %s", si.ver);
+  cjk_draw(s_gfx, 6, FOOT_Y, foot, C_DIM, -1, CJK_S);
+  cjk_draw(s_gfx, 314 - cjk_width("翻牌刷新", CJK_S), FOOT_Y, "翻牌刷新", C_DIM, -1, CJK_S);
+}

@@ -4,7 +4,7 @@
 #   .\scripts\build_apk.ps1 -Clean     # 先 clean 再构建
 #
 # 产物：android\app\build\outputs\apk\debug\app-debug.apk
-# 同时复制一份到 dist\票据屏-$ver-debug.apk（dist\ 不入库），方便传手机。
+# 同时复制一份到 dist\ESP32控制台-$ver-debug.apk（dist\ 不入库），方便传手机。
 
 param(
     [switch]$Clean
@@ -48,7 +48,7 @@ if (-not (Test-Path $apk)) { throw "构建完成但找不到 $apk" }
 
 $dist = Join-Path $root 'dist'
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
-$out = Join-Path $dist ("票据屏-$ver-debug.apk")
+$out = Join-Path $dist ("ESP32控制台-$ver-debug.apk")
 Copy-Item $apk $out -Force
 
 $size = [math]::Round((Get-Item $out).Length / 1KB, 1)

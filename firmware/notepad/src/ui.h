@@ -25,3 +25,20 @@ void ui_set_link(bool connected);
 void ui_set_timeout_s(uint32_t sec);
 void ui_set_page(int idx, int total);
 void ui_footer_refresh();     // 只重画页脚（状态变了就调一下）
+
+// ---------------- 系统信息页（模式：原生系统） ----------------
+struct SysInfo {
+  const char *ver;
+  const char *mode;
+  const char *wifi;       // "已连 192.168.88.32" / "未连"
+  const char *ble;        // "已连" / "广播中"
+  const char *sdcard;     // "29818MB" / "未挂载"
+  int psram_mb;
+  int flash_mb;
+  int batt_mv;
+  int temp_c;
+  uint32_t heap_kb;
+  uint32_t up_s;
+  int notes;
+};
+void ui_show_sys(const SysInfo &si);
