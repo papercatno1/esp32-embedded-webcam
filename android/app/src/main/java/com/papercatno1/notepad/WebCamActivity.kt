@@ -12,6 +12,10 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.content.ContentValues
+import android.provider.MediaStore
+import android.util.Base64
+import android.webkit.JavascriptInterface
 import android.webkit.JsResult
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
@@ -25,6 +29,36 @@ import androidx.activity.ComponentActivity
  * 照相模式：把设备 8080 端口的页面塞进 WebView。
  * 连上 BLE 后每隔 1.2 秒发一次 SYS 直到拿到 ip=，再切进视频页。
  */
+private class Saver(private val ctx: Context) {
+    @JavascriptInterface
+    fun save(name: String, b64: String): String {
+        return try {
+            val bytes = Base64.decode(b64, Base64.DEFAULT)
+            val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_")
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                val cv = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, safe)
+                    put(MediaStore.Downloads.MIME_TYPE, "image/jpeg")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val res = ctx.contentResolver
+                val uri = res.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv)
+                    ?: return "存盘失败：无法创建文件"
+                res.openOutputStream(uri)?.use { it.write(bytes) } ?: return "存盘失败：打不开输出流"
+                cv.clear(); cv.put(MediaStore.Downloads.IS_PENDING, 0)
+                res.update(uri, cv, null, null)
+            } else {
+                val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                if (!dir.exists()) dir.mkdirs()
+                java.io.File(dir, safe).writeBytes(bytes)
+            }
+            "已保存到「下载」：" + safe + "（" + bytes.size + " 字节）"
+        } catch (e: Exception) {
+            "存盘失败：" + e.message
+        }
+    }
+}
+
 class WebCamActivity : ComponentActivity() {
     private var s_retry = 0
     private fun logD(m: String) { android.util.Log.i("WebCam", m) }
@@ -83,6 +117,7 @@ class WebCamActivity : ComponentActivity() {
         web.settings.javaScriptEnabled = true
         // 每次都取设备上的最新页面，避免 WebView 缓存让人看不到新功能
         web.settings.cacheMode = WebSettings.LOAD_NO_CACHE
+        web.addJavascriptInterface(Saver(this), "ESP32Saver")
         web.settings.domStorageEnabled = true
         web.clearCache(true)
 

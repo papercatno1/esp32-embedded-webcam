@@ -248,6 +248,24 @@ function album(){
   if(d.style.display==='block'){d.style.display='none';return}
   d.style.display='block';loadAlbum();
 }
+function b64(buf){
+  var u=new Uint8Array(buf),s='',CH=0x8000;
+  for(var i=0;i<u.length;i+=CH){s+=String.fromCharCode.apply(null,u.subarray(i,i+CH))}
+  return btoa(s);
+}
+function downloadPhoto(name,btn){
+  if(!(window.ESP32Saver&&window.ESP32Saver.save)){msg('App 版本太旧，无法直接存到手机');return}
+  if(btn){btn.disabled=true;btn.textContent='下载中'}
+  fetch('/photo?n='+encodeURIComponent(name)).then(function(r){
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    return r.arrayBuffer();
+  }).then(function(buf){
+    var ret=window.ESP32Saver.save(name,b64(buf));
+    msg(ret);
+  }).catch(function(e){msg('下载失败：'+e.message)}).then(function(){
+    if(btn){btn.disabled=false;btn.textContent='下载'}
+  });
+}
 function loadAlbum(){
   var d=document.getElementById('al');d.innerHTML='读取中…';
   fetch('/list').then(function(r){return r.json()}).then(function(a){
@@ -260,9 +278,10 @@ function loadAlbum(){
       nm.textContent=x.n;nm.style.cssText='flex:1;font-size:14px';
       var sz=document.createElement('span');
       sz.textContent=Math.max(1,Math.round(x.s/1024))+'KB';sz.style.cssText='color:#8b949e;font-size:12px';
-      var dl=document.createElement('a');
-      dl.href='/photo?n='+x.n;dl.textContent='下载';
-      dl.setAttribute('download',x.n);dl.style.cssText='color:#4da3ff;font-size:14px;text-decoration:none';
+      var dl=document.createElement('button');
+      dl.textContent='下载';
+      dl.style.cssText='background:#1d4ed8;color:#fff;border:0;border-radius:6px;padding:6px 12px;font-size:13px';
+      dl.onclick=function(){downloadPhoto(x.n,dl)};
       var de=document.createElement('button');
       de.textContent='删除';de.style.cssText='background:#7f1d1d;color:#fff;border:0;border-radius:6px;padding:6px 12px;font-size:13px';
       de.onclick=function(){

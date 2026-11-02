@@ -49,7 +49,6 @@ void ui_force_redraw() {
   // 并补一次 INVON（这颗模组必须反显），最后整屏清黑。
   s_gfx->setRotation(0);
   s_gfx->setRotation(1);
-  s_gfx->invertDisplay(true);
   fill_black(s_gfx);
 }
 
