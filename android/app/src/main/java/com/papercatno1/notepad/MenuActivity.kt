@@ -16,7 +16,7 @@ class MenuActivity : ComponentActivity() {
             startActivity(Intent(this, SysActivity::class.java))
         }
         findViewById<Button>(R.id.btnCam).setOnClickListener {
-            Toast.makeText(this, "照相系统：固件合并完成后开放", Toast.LENGTH_SHORT).show()
+            startActivity(Intent(this, WebCamActivity::class.java))
         }
         findViewById<Button>(R.id.btnNote).setOnClickListener {
             startActivity(Intent(this, MainActivity::class.java))

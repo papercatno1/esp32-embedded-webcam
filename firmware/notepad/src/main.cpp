@@ -36,6 +36,7 @@
 #include "ui.h"
 #include "qmi8658.h"
 #include "power.h"
+#include "cam.h"
 
 #define FW_VERSION "0.4.0"
 
@@ -276,12 +277,12 @@ static esp_err_t h_root(httpd_req_t *req) {
 }
 
 static esp_err_t h_status(httpd_req_t *req) {
-  char buf[640];
+  char buf[768];
   snprintf(buf, sizeof(buf),
            "{\"ver\":\"" FW_VERSION "\",\"up\":%lu,\"heap\":%u,\"wifi\":\"%s\","
            "\"ip\":\"%s\",\"rssi\":%d,\"ble\":%d,\"mtu\":%d,\"notes\":%d,\"cur\":%d,"
            "\"bl\":%d,\"ot\":%lu,\"imu\":%d,\"idle\":%lu,\"rx\":%lu,\"sw\":%lu,"
-           "\"mode\":%d,\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d,\"sd\":%d,\"sdm\":%llu,\"ifs\":\"%s\",\"lc\":\"%s\",\"lr\":\"%s\",\"iw\":%d,\"ih\":%d,\"il\":%u,\"isz\":%u,\"bk\":%u,\"fl\":%u}",
+           "\"mode\":%d,\"swd\":%.1f,\"swa\":\"%c\",\"gnw\":%.0f,\"gpk\":%.0f,\"sn\":%d,\"sd\":%d,\"sdm\":%llu,\"ifs\":\"%s\",\"lc\":\"%s\",\"lr\":\"%s\",\"iw\":%d,\"ih\":%d,\"il\":%u,\"isz\":%u,\"bk\":%u,\"fl\":%u,\"cam\":%d,\"cf\":%.1f,\"cv\":%d,\"cfo\":%lu}",
            (unsigned long)(millis() / 1000), (unsigned)ESP.getFreeHeap(),
            (WiFi.getMode() == WIFI_AP) ? "ap" : "sta",
            cur_ip().toString().c_str(),
@@ -298,7 +299,8 @@ static esp_err_t h_status(httpd_req_t *req) {
            s_sd_ok ? 1 : 0, (unsigned long long)s_sd_mb, notes_img_fs_name(),
            s_last_cmd, s_last_rep, s_img_w, s_img_h, (unsigned)s_img_len,
            (unsigned)notes_img_index_size(),
-           (unsigned)ui_last_img_ink(), (unsigned)power_flip_count());
+           (unsigned)ui_last_img_ink(), (unsigned)power_flip_count(),
+           cam_active() ? 1 : 0, (double)cam_fps(), cam_viewers(), (unsigned long)cam_frames());
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
@@ -620,22 +622,32 @@ static void handle_cmd(const char *raw) {
     ble_send(o);
   } else if (!strcmp(cmd, "MODE")) {
     if (arg) {
-      if (!strcasecmp(arg, "sys")) s_mode = 1;
-      else if (!strcasecmp(arg, "note")) s_mode = 0;
-      else if (!strcasecmp(arg, "cam")) s_mode = 2;   // 照相模式还在合并中
+      if (!strcasecmp(arg, "note")) s_mode = 0;
+      else if (!strcasecmp(arg, "sys")) s_mode = 1;
+      else if (!strcasecmp(arg, "cam")) s_mode = 2;
     }
+    if (s_mode != 2) cam_end();       // 离开照相就释放摄像头（PSRAM 很贵）
     if (s_mode == 1) sys_snapshot_draw();
-    else if (s_mode == 2) ui_message("照相模式", "固件合并中", "敬请期待");
+    else if (s_mode == 2) {
+      if (cam_begin()) {
+        char u[48];
+        snprintf(u, sizeof(u), "http://%s:8080/", cur_ip().toString().c_str());
+        ui_message("照相模式", u, "手机浏览器打开 (MODE note 退出)");
+      } else {
+        s_mode = 0;
+        ui_message("照相失败", "摄像头没初始化成功", "查排线后重试");
+      }
+    }
     else if (notes_count() > 0) ui_show_note(notes_cursor());
     else ui_show_empty();
     char o[32];
     snprintf(o, sizeof(o), "OK MODE %s", s_mode == 1 ? "sys" : (s_mode == 2 ? "cam" : "note"));
     ble_send(o);
   } else if (!strcmp(cmd, "SYS")) {
-    char o[192];
+    char o[224];
     snprintf(o, sizeof(o),
-             "OK SYS ver=%s mode=%s psram=%dMB flash=%dMB tf=%lluMB bat=%d.%02dV temp=%dC heap=%luKB wifi=%d ble=%d up=%lus notes=%d",
-             FW_VERSION, mode_name(s_mode),
+             "OK SYS ver=%s mode=%s ip=%s psram=%dMB flash=%dMB tf=%lluMB bat=%d.%02dV temp=%dC heap=%luKB wifi=%d ble=%d up=%lus notes=%d",
+             FW_VERSION, mode_name(s_mode), cur_ip().toString().c_str(),
              (int)(ESP.getPsramSize() / (1024 * 1024)), (int)(ESP.getFlashChipSize() / (1024 * 1024)),
              (unsigned long long)s_sd_mb, (int)(analogReadMilliVolts(5) * 2) / 1000,
              ((int)(analogReadMilliVolts(5) * 2) % 1000) / 10,
@@ -714,6 +726,18 @@ void loop() {
   }
 
   power_tick();   // 超时熄屏 / 敲击唤醒 / 甩动检测
+
+  if (s_mode == 2) {
+    cam_loop();
+    static uint32_t cam_ui_ms = 0;
+    if (millis() - cam_ui_ms > 2000) {
+      cam_ui_ms = millis();
+      char a[32], b[48];
+      snprintf(a, sizeof(a), "%s %.1ffps", cam_res(), (double)cam_fps());
+      snprintf(b, sizeof(b), "http://%s:8080/", cur_ip().toString().c_str());
+      ui_message("照相模式", a, b);
+    }
+  }
 
   // 甩一下翻页：往右下一条，往左上一条
   if (s_need_show) {
