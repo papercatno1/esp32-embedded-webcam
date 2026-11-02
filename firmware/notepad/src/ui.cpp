@@ -14,6 +14,8 @@
 #define FOOT_LINE  212     // 页脚分隔线
 #define FOOT_Y     216     // 页脚文字 y（16px 字）
 
+static void fill_black(Arduino_GFX *g);   // 前向声明（定义在 ui_begin 之前）
+
 static Arduino_DataBus *s_bus = nullptr;
 static Arduino_GFX     *s_gfx = nullptr;
 static int  s_bl_pct = 100;
@@ -43,14 +45,14 @@ static void bl_apply() {
 void ui_force_redraw() {
   if (!s_gfx) return;
   s_gfx->setRotation(1);
-  s_gfx->fillScreen(C_BG);
+  fill_black(s_gfx);
 }
 
 void ui_show_splash(const char *ver) {
   if (!s_gfx) return;
   s_gfx->setRotation(1);
-  s_gfx->invertDisplay(false);        // 强制正显，避免 NVS 里的 INV=1 把黑底翻成白底
-  s_gfx->fillScreen(0x0000);          // 黑底
+  s_gfx->invertDisplay(true);         // 这颗模组要 INVON 才是黑底白字
+  fill_black(s_gfx);          // 黑底
 
   // 大标题：ESP-32 百宝箱（24px 字形放大 2 倍 = 48px，白字）
   const char *t1 = "ESP-32";
@@ -70,6 +72,11 @@ void ui_show_splash(const char *ver) {
   }
 
   // 署名（16px）
+  // 颜色自检条：红/绿/蓝各 20x8，用于判断面板是否反显
+  s_gfx->fillRect(120, 200, 20, 8, 0xF800);
+  s_gfx->fillRect(150, 200, 20, 8, 0x07E0);
+  s_gfx->fillRect(180, 200, 20, 8, 0x001F);
+
   const char *by = "powered by papercat";
   int wb = cjk_width(by, CJK_S);
   cjk_draw(s_gfx, (320 - wb) / 2, 162, by, C_ACCENT, -1, CJK_S);
@@ -80,7 +87,14 @@ void ui_bus_recover() {
   s_bus->begin();
   s_gfx->begin();
   s_gfx->setRotation(1);
-  s_gfx->fillScreen(C_BG);
+  fill_black(s_gfx);
+}
+
+
+// 逐行 HLine 填满整屏（和文字用同一条绘制路径，避免 fillScreen 在个别面板上不生效）
+static void fill_black(Arduino_GFX *g) {
+  if (!g) return;
+  for (int y = 0; y < 240; y++) g->drawFastHLine(0, y, 320, 0x0000);
 }
 
 void ui_begin() {
@@ -106,8 +120,8 @@ void ui_reinit_panel() {
   if (!s_gfx) return;
   s_gfx->begin(40000000);        // 只重发面板初始化，不重建 SPI 总线（否则 SD 会话会挂）
   s_gfx->setRotation(1);
-  s_gfx->invertDisplay(false);   // 强制正显：黑底白字
-  s_gfx->fillScreen(0x0000);
+  s_gfx->invertDisplay(true);    // 这颗模组要 INVON 才是黑底白字
+  fill_black(s_gfx);
 }
 
 // ST7789 的反显开关：IPS 屏有的需要 INVON，有的必须 INVOFF。
@@ -165,7 +179,7 @@ void ui_footer_refresh() {
 
 static void clear() {
   if (!s_gfx) return;
-  s_gfx->fillScreen(C_BG);
+  fill_black(s_gfx);
 }
 
 // 按像素宽度折行，结果放在 out[][NOTE_LINE_BYTES]
@@ -333,7 +347,7 @@ static void sys_row(int y, const char *k, const char *v) {
 void ui_show_sys(const SysInfo &si) {
   if (!s_gfx) return;
   // 老规矩：黑底白字，标题条也是黑的，只用一条下划线分隔
-  s_gfx->fillScreen(0x0000);
+  fill_black(s_gfx);
   s_gfx->drawFastHLine(0, TITLE_H - 1, 320, C_DIM);
   cjk_draw(s_gfx, 6, 5, "系统信息", 0xFFFF, -1, CJK_L);
   cjk_draw(s_gfx, 282, 9, si.mode ? si.mode : "原生", 0xFFFF, -1, CJK_S);
