@@ -295,7 +295,7 @@ static esp_err_t h_status(httpd_req_t *req) {
            (unsigned long)(power_idle_ms() / 1000),
            (unsigned long)s_cmd_rx,
            (unsigned long)power_swipe_count(),
-           s_mode, power_last_swipe_deg(), power_last_swipe_axis(),
+           s_mode, cam_last_err(), power_last_swipe_deg(), power_last_swipe_axis(),
            power_last_mag(), power_peak_mag(), power_get_swipe_sign(),
            s_sd_ok ? 1 : 0, (unsigned long long)s_sd_mb, notes_img_fs_name(),
            s_last_cmd, s_last_rep, s_img_w, s_img_h, (unsigned)s_img_len,
@@ -407,10 +407,6 @@ static void do_show(int idx) {
       pk.end();
     }
   }
-  ui_show_splash(FW_VERSION);
-  delay(2500);                    // 欢迎页停留久一点，别一闪而过
-  s_mode = 1;                     // 开机默认进「系统信息」
-  sys_snapshot_draw();
     return;
   }
   ui_show_note(notes_cursor());   // 必须用取模后的游标，否则越界会画成空白页
@@ -642,7 +638,7 @@ static void handle_cmd(const char *raw) {
     if (s_mode != 2 && cam_active()) cam_end();   // 离开照相就释放摄像头（PSRAM 很贵）
     if (s_mode == 1) sys_snapshot_draw();
     else if (s_mode == 2) {
-      cam_end();                      // 先彻底复位，再起，避免上次残留监听
+      if (cam_active()) { cam_end(); delay(250); }   // 只有真开着才复位，deinit 后要给传感器一点时间
       if (cam_begin()) {
         Serial.printf("[MODE] cam 启动成功 ip=%s\n", WiFi.localIP().toString().c_str());
         ui_force_redraw();         // 重设旋转+清屏，别重建总线（会把反显/旋转丢掉）
@@ -717,16 +713,15 @@ void setup() {
   ui_set_timeout_s(power_timeout() / 1000);
   ui_set_link(false);
 
-  if (notes_count() > 0) ui_show_note(notes_cursor());
-  else ui_show_empty();
-
   s_cmdq = xQueueCreate(6, sizeof(CmdLine));
   ble_begin();
   wifi_begin();
 
   if (ui_ready()) {
-    if (notes_count() > 0) ui_show_note(notes_cursor());
-    else ui_show_empty();
+    ui_show_splash(FW_VERSION);   // 固定欢迎页，停留 2.5 秒
+    delay(2500);
+    s_mode = 1;                   // 开机默认进「系统信息」
+    sys_snapshot_draw();
   }
   Serial.printf("[SYS] heap=%u\n", (unsigned)ESP.getFreeHeap());
 }

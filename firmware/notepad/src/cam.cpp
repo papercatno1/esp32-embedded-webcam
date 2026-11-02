@@ -205,6 +205,9 @@ void push_frame() {
 
 }  // namespace
 
+static int s_last_err = -999;
+int cam_last_err() { return s_last_err; }
+
 bool cam_begin() {
   if (s_on) return true;
 
@@ -242,6 +245,7 @@ bool cam_begin() {
   }
 
   esp_err_t err = esp_camera_init(&cfg);
+  s_last_err = (int)err;
   if (err != ESP_OK) {
     Serial.printf("[CAM] 初始化失败 0x%x (%s)\n", err, esp_err_to_name(err));
     return false;

@@ -3,6 +3,7 @@
 #pragma once
 #include <Arduino.h>
 
+int  cam_last_err();
 bool cam_begin();      // 初始化摄像头并开始监听 8080；失败返回 false
 void cam_end();        // 停止监听并释放摄像头（省内存）
 void cam_loop();       // 每轮 loop 调一次：接受新连接 + 推帧
