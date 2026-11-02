@@ -37,7 +37,7 @@
 #include "qmi8658.h"
 #include "power.h"
 
-#define FW_VERSION "0.3.5"
+#define FW_VERSION "0.3.6"
 
 // ---------------- BLE ----------------
 #define NUS_SVC "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -90,7 +90,7 @@ static size_t b64_decode(const char *src, uint8_t *dst, size_t cap) {
 }
 
 // ---- TF 卡（和 LCD 共用 SCK39/MOSI38，CS41、MISO40）----
-static SPIClass s_sd_spi(HSPI);
+static SPIClass s_sd_spi(FSPI);   // 与 LCD 同一个 SPI 外设（LCD 也用 FSPI），避免两个外设抢同一组引脚
 static bool     s_sd_ok = false;
 static uint64_t s_sd_mb = 0;
 static bool     s_sd_hi_done = false;
@@ -115,7 +115,8 @@ static bool sd_card_present() {
 }
 
 static bool sd_probe() {
-  if (!s_sd_hi_done) { s_sd_spi.begin(39, 40, 38, 41); s_sd_hi_done = true; }
+  s_sd_spi.begin(39, 40, 38, 41);   // LCD 与卡共用引脚，每次访问前先把引脚路由回卡
+  s_sd_hi_done = true;
   s_sd_ok = SD.begin(41, s_sd_spi, 20000000);
   if (!s_sd_ok) s_sd_ok = SD.begin(41, s_sd_spi, 4000000);  // 慢速再试一次（老卡常见）
   if (!s_sd_ok) {
@@ -555,10 +556,8 @@ static void handle_cmd(const char *raw) {
   } else if (!strcmp(cmd, "M")) {
     // 看 TF 卡：第一次会现场挂载（探测会扰动 SPI，之后重画一帧自愈）
     char o[96];
-    SD.end();                 // 先彻底卸掉，保证这次是干净的挂载
-    s_sd_ok = false;
-    s_sd_hi_done = false;
-    bool ok = sd_probe();
+    s_sd_spi.begin(39, 40, 38, 41);   // 把共用引脚路由回卡
+    bool ok = s_sd_ok || sd_probe();
     if (!ok) {
       snprintf(o, sizeof(o), s_sd_present ? "ERR NOFAT" : "ERR NOCARD");
     } else {
@@ -572,11 +571,7 @@ static void handle_cmd(const char *raw) {
       snprintf(o, sizeof(o), "OK M %s %llu w=%d", tn, (unsigned long long)s_sd_mb, wr ? 1 : 0);
     }
     s_sd_probed = true;
-    SD.end();                 // 用完就卸，别让它长期跟 LCD 抢总线
-    s_sd_ok = false;
-    s_sd_hi_done = false;
-    notes_refresh_img_fs();   // 卸掉之后重新判定：卡不在了就回落内部 FFat
-    ui_bus_recover();
+    notes_refresh_img_fs();
     ble_send(o);
     if (notes_count() > 0) ui_show_note(notes_cursor()); else ui_show_empty();
   } else if (!strcmp(cmd, "K")) {
@@ -606,9 +601,15 @@ void setup() {
   ui_begin();
   cjk_init();
 
-  // 开机不挂 TF 卡：它与 LCD 共用 SCK(39)/MOSI(38)，同时挂着会互相抢总线
-  // （实测：挂上后 LCD 一初始化，卡就掉线，cardType() 变 CARD_NONE）。
-  // 需要卡的时候用 M 指令"临时挂载 → 读写 → 卸载 → 恢复 LCD 总线"。
+  // TF 卡与 LCD 共用 SCK(39)/MOSI(38)：LCD 初始化之后再挂卡，挂完把总线还给 LCD，
+  // 之后两边各自 startWrite/endWrite，互不影响（工厂 demo 本来就这么共存）。
+  bool sd_boot = false;
+  for (int i = 0; i < 3 && !sd_boot; i++) {
+    sd_boot = sd_probe();
+    if (!sd_boot) delay(180);
+  }
+  s_sd_probed = true;
+  Serial.printf("[SD] 开机挂卡 %s %llu MB\n", sd_boot ? "OK" : "失败", (unsigned long long)s_sd_mb);
   boolean ok = notes_begin();
   Serial.printf("[NOTE] 存储 %s\n", ok ? "可用" : "不可用");
 
