@@ -395,3 +395,17 @@ void notes_set_cursor(int idx) {
   if (idx < 0) idx = s_n + (idx % s_n);
   s_cursor = idx % s_n;
 }
+
+// 相机照片直接落卡（/camNNNN.jpg）
+int notes_save_jpeg(const uint8_t *buf, size_t len) {
+  if (!buf || !len) return 0;
+  static uint32_t seq = 0;
+  char path[28];
+  snprintf(path, sizeof(path), "/cam%04lu.jpg", (unsigned long)(seq++ % 10000));
+  File f = img_fs().open(path, FILE_WRITE);
+  if (!f) return 0;
+  size_t n = f.write(buf, len);
+  f.close();
+  return (n == len) ? 1 : 0;
+}
+

@@ -49,29 +49,26 @@ void ui_force_redraw() {
 void ui_show_splash(const char *ver) {
   if (!s_gfx) return;
   s_gfx->setRotation(1);
-  for (int f = 0; f < 7; f++) {
-    s_gfx->fillScreen(C_BG);
-    cjk_draw(s_gfx, 22, 34, "ESP-32", C_TITLE, -1, CJK_L);
-    cjk_draw(s_gfx, 126, 34, "百宝箱", C_TITLE, -1, CJK_L);
-    cjk_draw(s_gfx, 24, 72, "ESP32-S3   16MB   8MB PSRAM", C_DIM, -1, CJK_S);
+  s_gfx->fillScreen(C_BG);
 
-    // 箱子：外框 + 盖线 + 提手
-    const int bx = 120, by = 150, bw = 80, bh = 44;
-    s_gfx->drawRect(bx, by, bw, bh, C_ACCENT);
-    s_gfx->drawFastHLine(bx, by + 12, bw, C_ACCENT);
-    s_gfx->drawFastVLine(bx + bw / 2, by, 12, C_ACCENT);
-    s_gfx->drawFastHLine(bx + 24, by + bh / 2 + 4, 32, C_DIM);
+  // 大标题：ESP-32 百宝箱（居中）
+  const char *t1 = "ESP-32";
+  const char *t2 = "百宝箱";
+  int w1 = cjk_width(t1, CJK_L), w2 = cjk_width(t2, CJK_L);
+  int x = (320 - (w1 + w2 + 8)) / 2;
+  cjk_draw(s_gfx, x, 66, t1, C_TITLE, -1, CJK_L);
+  cjk_draw(s_gfx, x + w1 + 8, 66, t2, C_TITLE, -1, CJK_L);
 
-    // 上升箭头：竖线 + 箭头尖，逐帧上移
-    int ay = by - 12 - f * 7;
-    s_gfx->drawFastVLine(bx + bw / 2, ay, 26, C_TEXT);
-    for (int i = 0; i < 6; i++) {
-      s_gfx->drawFastHLine(bx + bw / 2 - 6 + i, ay - 6 + i, 12 - i * 2, C_TEXT);
-    }
-    cjk_draw(s_gfx, 24, 206, "开机中", C_DIM, -1, CJK_S);
-    if (ver) cjk_draw(s_gfx, 250, 206, ver, C_DIM, -1, CJK_S);
-    delay(60);
+  // 版本号
+  if (ver) {
+    int wv = cjk_width(ver, CJK_S);
+    cjk_draw(s_gfx, (320 - wv) / 2, 116, ver, C_DIM, -1, CJK_S);
   }
+
+  // 署名
+  const char *by = "powered by papercat";
+  int wb = cjk_width(by, CJK_S);
+  cjk_draw(s_gfx, (320 - wb) / 2, 150, by, C_ACCENT, -1, CJK_S);
 }
 
 void ui_bus_recover() {

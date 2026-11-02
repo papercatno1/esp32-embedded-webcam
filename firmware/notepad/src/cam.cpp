@@ -1,4 +1,5 @@
 #include "cam.h"
+#include "notes.h"
 #include <WiFi.h>
 #include <lwip/sockets.h>
 #include "esp_camera.h"
@@ -118,6 +119,33 @@ got_line:
     return;
   }
 
+  if (line.startsWith("GET /shot")) {
+    camera_fb_t *fb = grab();
+    char msg[96];
+    if (!fb) {
+      snprintf(msg, sizeof(msg), "相机忙，稍后再试");
+    } else {
+      int r = notes_save_jpeg(fb->buf, fb->len);
+      snprintf(msg, sizeof(msg), r ? "已存到卡上" : "存卡失败（没卡或写不进去）");
+      release(fb);
+      s_frames++;
+    }
+    send_headers(nc, "text/plain; charset=utf-8", strlen(msg));
+    send_all(nc, (const uint8_t *)msg, strlen(msg), 500);
+    close_graceful(nc);
+    return;
+  }
+
+  if (line.startsWith("GET /reboot")) {
+    const char *m = "正在重启…";
+    send_headers(nc, "text/plain; charset=utf-8", strlen(m));
+    send_all(nc, (const uint8_t *)m, strlen(m), 500);
+    close_graceful(nc);
+    delay(200);
+    ESP.restart();
+    return;
+  }
+
   if (line.startsWith("GET /status.json")) {
     char b[256];
     const bool ap = (WiFi.getMode() == WIFI_AP);
@@ -135,13 +163,25 @@ got_line:
 
   if (line.startsWith("GET / ") || line.startsWith("GET /index")) {
     static const char page[] =
-        "<!doctype html><meta charset=utf-8><title>ESP32 照相</title>"
-        "<body style='margin:0;background:#111;color:#eee;font-family:sans-serif'>"
-        "<div style='padding:10px 14px;font-size:15px'>ESP32-S3 照相模式</div>"
-        "<img src='/stream' style='width:100%;max-width:800px;display:block'>"
-        "<div style='padding:10px 14px;font-size:13px;color:#9aa'>"
-        "<a style='color:#4da3ff' href='/capture'>取一张</a> · "
-        "<a style='color:#4da3ff' href='/status.json'>状态</a></div></body>";
+        "<!doctype html><meta charset=utf-8>"
+        "<meta name=viewport content='width=device-width,initial-scale=1'>"
+        "<title>ESP32 照相</title>"
+        "<body style='margin:0;background:#0e1114;color:#e8eaed;font-family:system-ui,sans-serif'>"
+        "<div style='display:flex;align-items:center;gap:10px;padding:10px 14px;"
+        "border-bottom:1px solid #23282d'><b>ESP32-S3 · 照相</b>"
+        "<span style='color:#8b949e;font-size:13px' id='st'>实时流</span></div>"
+        "<img id='v' src='/stream' style='width:100%;display:block;background:#000'>"
+        "<div style='padding:12px 14px;display:flex;gap:10px;flex-wrap:wrap'>"
+        "<a href='/shot' target='_blank' style='background:#2563eb;color:#fff;"
+        "padding:10px 16px;border-radius:8px;text-decoration:none'>拍一张存卡</a>"
+        "<a href='/capture' target='_blank' style='background:#1f2937;color:#e5e7eb;"
+        "padding:10px 16px;border-radius:8px;text-decoration:none'>下载当前帧</a>"
+        "<a href='/' style='background:#1f2937;color:#e5e7eb;padding:10px 16px;"
+        "border-radius:8px;text-decoration:none'>刷新</a></div>"
+        "<div style='padding:0 14px 14px;color:#8b949e;font-size:12px'>"
+        "拍一张/下载都会新开一个标签页，返回来仍是实时画面；画面卡住会自动重连。</div>"
+        "<script>var v=document.getElementById('v');v.onerror=function(){"
+        "setTimeout(function(){v.src='/stream?t='+Date.now()},1200)};</script>";
     send_headers(nc, "text/html; charset=utf-8", (int)strlen(page));
     send_all(nc, (const uint8_t *)page, strlen(page), 800);
     close_graceful(nc);

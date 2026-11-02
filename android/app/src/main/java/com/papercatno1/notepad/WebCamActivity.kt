@@ -22,6 +22,43 @@ class WebCamActivity : ComponentActivity() {
     private var s_retry = 0
     private fun logD(m: String) { android.util.Log.i("WebCam", m) }
 
+    /** 先探测 8080 是否起来了，起来了再 loadUrl，避免闪一次"网页无法打开" */
+    private fun probeThenLoad(web: WebView, ip: String, n: Int = 0) {
+        if (n == 0) {
+            web.loadDataWithBaseURL(
+                null,
+                "<html><body style='margin:0;background:#0e1114;color:#8b949e;" +
+                    "font-family:sans-serif;display:flex;align-items:center;" +
+                    "justify-content:center;height:100vh;font-size:15px'>正在连接设备…</body></html>",
+                "text/html", "utf-8", null
+            )
+        }
+        Thread {
+            val ok = try {
+                val c = java.net.URL("http://$ip:8080/status.json").openConnection()
+                    as java.net.HttpURLConnection
+                c.connectTimeout = 1200
+                c.readTimeout = 1200
+                val code = c.responseCode
+                c.disconnect()
+                code in 200..299
+            } catch (e: Exception) { false }
+            runOnUiThread {
+                if (ok) {
+                    logD("设备网页已就绪，加载")
+                    s_retry = 0
+                    web.loadUrl("http://$ip:8080/")
+                } else if (n < 20) {
+                    logD("设备网页未就绪 ${n + 1}/20")
+                    web.postDelayed({ probeThenLoad(web, ip, n + 1) }, 800)
+                } else {
+                    logD("20 次探测都失败：确认设备已进入照相模式、手机与板子在同一 WiFi")
+                }
+            }
+        }.start()
+    }
+
+
 
     private lateinit var web: WebView
     private lateinit var ble: BleLink
@@ -100,7 +137,7 @@ class WebCamActivity : ComponentActivity() {
         handler.removeCallbacks(poll)
         prefs.edit().putString("ip", ip).apply()
         ble.send("MODE cam")                 // 让设备真的进照相模式
-        web.postDelayed({ web.loadUrl("http://$ip:8080/") }, 800)
+        probeThenLoad(web, ip)
     }
 
     private fun showStatus(title: String, sub: String) {

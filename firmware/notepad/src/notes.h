@@ -37,6 +37,9 @@ int  notes_add_img_rle(const char *title, uint16_t w, uint16_t h,
                        const uint8_t *rle, size_t rle_len, bool persist = true);
 int  notes_img_count();
 uint32_t notes_img_index_size();      // /imgs.txt 字节数（诊断：0 = 索引没写成）
+// 把一张 JPEG 存到卡上（/camNNNN.jpg）；返回 1=成功
+int notes_save_jpeg(const uint8_t *buf, size_t len);
+
 uint32_t notes_img_hash(const uint8_t *bits, size_t n);   // FNV-1a，用来核对传过去的位图
 void notes_refresh_img_fs();          // 探到卡之后调一次：图片改存 TF 卡
 const char *notes_img_fs_name();      // "sd" / "ffat"，给 status.json 用
