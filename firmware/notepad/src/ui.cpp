@@ -274,17 +274,18 @@ void ui_progress(int pct, const char *title) {
 
 // ---------------- 系统信息页 ----------------
 static void sys_row(int y, const char *k, const char *v) {
-  cjk_draw(s_gfx, 8, y, k, C_DIM, -1, CJK_S);
+  cjk_draw(s_gfx, 8, y, k, C_DIM, -1, CJK_S);   // 名称灰、数值白
   int vw = cjk_width(v, CJK_S);
   cjk_draw(s_gfx, 312 - vw, y, v, C_TEXT, -1, CJK_S);
 }
 
 void ui_show_sys(const SysInfo &si) {
   if (!s_gfx) return;
-  s_gfx->fillScreen(C_BG);
-  s_gfx->fillRect(0, 0, 320, TITLE_H, C_BAR);
-  cjk_draw(s_gfx, 6, 5, "系统信息", C_TITLE, -1, CJK_L);
-  cjk_draw(s_gfx, 270, 9, si.mode ? si.mode : "原生", C_ACCENT, -1, CJK_S);
+  // 老规矩：黑底白字，标题条也是黑的，只用一条下划线分隔
+  s_gfx->fillScreen(0x0000);
+  s_gfx->drawFastHLine(0, TITLE_H - 1, 320, C_DIM);
+  cjk_draw(s_gfx, 6, 5, "系统信息", 0xFFFF, -1, CJK_L);
+  cjk_draw(s_gfx, 282, 9, si.mode ? si.mode : "原生", 0xFFFF, -1, CJK_S);
 
   char vb[32];
   const int y0 = 38, lh = 17;   // 10 行压到页脚线(212)以上
@@ -300,7 +301,7 @@ void ui_show_sys(const SysInfo &si) {
   sys_row(y0 + lh * 8, "WiFi", si.wifi);
   snprintf(vb, sizeof(vb), "%s %d条", si.ble, si.notes);         sys_row(y0 + lh * 9, "蓝牙/消息", vb);
 
-  s_gfx->drawFastHLine(0, FOOT_LINE, 320, C_BAR);
+  s_gfx->drawFastHLine(0, FOOT_LINE, 320, C_DIM);
   char foot[48];
   snprintf(foot, sizeof(foot), "固件 %s", si.ver);
   cjk_draw(s_gfx, 6, FOOT_Y, foot, C_DIM, -1, CJK_S);

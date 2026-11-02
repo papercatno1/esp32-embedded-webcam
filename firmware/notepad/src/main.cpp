@@ -38,7 +38,7 @@
 #include "power.h"
 #include "cam.h"
 
-#define FW_VERSION "0.4.0"
+#define FW_VERSION "0.4.2"
 
 // ---------------- BLE ----------------
 #define NUS_SVC "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -630,6 +630,7 @@ static void handle_cmd(const char *raw) {
     if (s_mode == 1) sys_snapshot_draw();
     else if (s_mode == 2) {
       if (cam_begin()) {
+        ui_bus_recover();          // 摄像头初始化会碰 LEDC/引脚，屏幕总线重来一次更稳
         char u[48];
         snprintf(u, sizeof(u), "http://%s:8080/", cur_ip().toString().c_str());
         ui_message("照相模式", u, "手机浏览器打开 (MODE note 退出)");

@@ -34,8 +34,9 @@ class SysActivity : ComponentActivity() {
         findViewById<Button>(R.id.btnConnect).setOnClickListener { ensurePerms() }
         findViewById<Button>(R.id.btnRefresh).setOnClickListener { askSys() }
         findViewById<Button>(R.id.btnSysScreen).setOnClickListener {
-            if (!ble.ready) { toast("还没连上设备"); return@setOnClickListener }
+            if (!ble.connected) { toast("还没连上设备，先点「扫描连接」"); return@setOnClickListener }
             ble.send("MODE sys")
+            toast("已发指令：切到系统页")
         }
         ensurePerms()
     }
@@ -57,13 +58,21 @@ class SysActivity : ComponentActivity() {
     }
 
     private fun askSys() {
-        if (!ble.ready) { toast("还没连上设备"); return }
+        if (!ble.connected) { toast("还没连上设备，先点「扫描连接」"); return }
         ble.send("SYS")
     }
 
+    private var autoAsked = false
+
     private fun onBle(msg: String) {
         appendLog(msg)
-        tvStatus.text = if (ble.ready) "已连接 · MTU ${ble.mtu}" else "未连接"
+        tvStatus.text = when {
+            ble.ready -> "已连接 · MTU ${ble.mtu}"
+            ble.connected -> "已连上，正在初始化通道…"
+            else -> "未连接（点“扫描连接”）"
+        }
+        // 通道一就绪就自动读一次，省得用户还要点
+        if (ble.ready && !autoAsked) { autoAsked = true; ble.send("SYS") }
         val i = msg.indexOf("OK SYS ")
         if (i >= 0) tvInfo.text = prettySys(msg.substring(i + 7))
     }
