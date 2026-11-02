@@ -11,6 +11,10 @@
 - 详见 [CHANGELOG.md](CHANGELOG.md) · [firmware/webcam](firmware/webcam/README.md) · [firmware/notepad](firmware/notepad/README.md) · [android/](docs/安卓App.md) · [docs/](docs/)
 
 
+## 系统总览
+
+整体架构、BLE 指令表、HTTP 端点、分区与烧录、已知坑，见 [`docs/系统总览.md`](docs/系统总览.md)。
+
 ## 目录结构
 
 ```
