@@ -39,7 +39,7 @@
 #include "power.h"
 #include "cam.h"
 
-#define FW_VERSION "0.4.8"
+#define FW_VERSION "0.4.10"
 
 // ---------------- BLE ----------------
 #define NUS_SVC "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -730,7 +730,10 @@ void setup() {
   Serial.printf("[SD] 开机挂卡 %s %llu MB\n", sd_boot ? "OK" : "失败", (unsigned long long)s_sd_mb);
   if (sd_boot) {
     notes_refresh_img_fs();
-    ui_reinit_panel();
+    // 注意：这里绝不能调 ui_reinit_panel()——它会重发面板初始化、重配 FSPI，
+    // 把刚挂好的 SD 会话弄死（写不进、cardType 变 CARD_NONE）。
+    // 只做"不碰 SPI 总线"的强制重画，屏幕与卡才都正常。
+    ui_force_redraw();
     if (s_mode == 1) sys_snapshot_draw();
     else if (notes_count() > 0) ui_show_note(notes_cursor());
     else ui_show_empty();

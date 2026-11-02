@@ -197,21 +197,23 @@ got_line:
   }
 
   if (line.startsWith("GET /status.json")) {
-    char b[256];
+    char b[320];
     const bool ap = (WiFi.getMode() == WIFI_AP);
     snprintf(b, sizeof(b),
              "{\"mode\":\"cam\",\"ip\":\"%s\",\"res\":\"%s\",\"fps\":%.1f,"
-             "\"frames\":%lu,\"viewers\":%d,\"heap\":%lu}",
+             "\"frames\":%lu,\"viewers\":%d,\"heap\":%lu,"
+             "\"ifs\":\"%s\",\"isz\":%u}",
              (ap ? WiFi.softAPIP() : WiFi.localIP()).toString().c_str(),
              s_res, (double)s_fps, (unsigned long)s_frames, s_viewers,
-             (unsigned long)ESP.getFreeHeap());
+             (unsigned long)ESP.getFreeHeap(),
+             notes_img_fs_name(), (unsigned)notes_img_index_size());
     send_headers(nc, "application/json", strlen(b));
     send_all(nc, (const uint8_t *)b, strlen(b), 500);
     close_graceful(nc);
     return;
   }
 
-  if (line.startsWith("GET / ") || line.startsWith("GET /index")) {
+  if (line.startsWith("GET / ") || line.startsWith("GET /?") || line.startsWith("GET /index")) {
     static const char page[] PROGMEM = R"HTML(
 <!doctype html><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
