@@ -39,7 +39,7 @@
 #include "power.h"
 #include "cam.h"
 
-#define FW_VERSION "0.4.6"
+#define FW_VERSION "0.4.7"
 
 // ---------------- BLE ----------------
 #define NUS_SVC "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -695,25 +695,11 @@ void setup() {
   delay(300);
   Serial.println("\n=== ESP32-NOTE 票据屏 " FW_VERSION " ===");
 
-  // TF 卡必须在 LCD 之前挂：SD 与 LCD 共用 SCK(39)/MOSI(38)，
-  // 谁后初始化谁把总线拿走 —— LCD 先初始化就会被 SD 弄成花屏。
-  // 开机先挂 TF 卡（必须在 LCD 初始化之前：SD 与 LCD 共用 SCK(39)/MOSI(38)，
-  // 谁后初始化谁把总线拿走 —— LCD 先初始化就会被 SD 弄成花屏）
   ui_begin();
   cjk_init();
-
-  // TF 卡与 LCD 共用 SCK(39)/MOSI(38)：LCD 初始化之后再挂卡，挂完把总线还给 LCD，
-  // 之后两边各自 startWrite/endWrite，互不影响（工厂 demo 本来就这么共存）。
-  bool sd_boot = false;
-  for (int i = 0; i < 3 && !sd_boot; i++) {
-    sd_boot = sd_probe();
-    if (!sd_boot) delay(180);
-  }
-  s_sd_probed = true;
-  Serial.printf("[SD] 开机挂卡 %s %llu MB\n", sd_boot ? "OK" : "失败", (unsigned long long)s_sd_mb);
-  ui_reinit_panel();              // 挂卡重配过 FSPI，重发面板初始化
-  ui_show_splash(FW_VERSION);     // 初始化期间显示欢迎页
+  ui_show_splash(FW_VERSION);      // 先出欢迎页：此时还没碰 SD，画面最干净
   const uint32_t splash_ms = millis();
+
   boolean ok = notes_begin();
   Serial.printf("[NOTE] 存储 %s\n", ok ? "可用" : "不可用");
 
@@ -726,11 +712,30 @@ void setup() {
   ble_begin();
   wifi_begin();
 
+  // 欢迎页停留 2.5 秒后整屏换成系统信息页
   if (ui_ready()) {
     if (millis() - splash_ms < 2500) delay(2500 - (millis() - splash_ms));
     s_mode = 1;                   // 开机默认进「系统信息」
     sys_snapshot_draw();
   }
+
+  // 挂 TF 卡放到最后：sd_probe() 会重配 FSPI（SD 与 LCD 共用 SCK39/MOSI38），
+  // 挂完必须重发面板初始化 + 重画当前页，否则两页内容会叠在一起。
+  bool sd_boot = false;
+  for (int i = 0; i < 3 && !sd_boot; i++) {
+    sd_boot = sd_probe();
+    if (!sd_boot) delay(180);
+  }
+  s_sd_probed = true;
+  Serial.printf("[SD] 开机挂卡 %s %llu MB\n", sd_boot ? "OK" : "失败", (unsigned long long)s_sd_mb);
+  if (sd_boot) {
+    notes_refresh_img_fs();
+    ui_reinit_panel();
+    if (s_mode == 1) sys_snapshot_draw();
+    else if (notes_count() > 0) ui_show_note(notes_cursor());
+    else ui_show_empty();
+  }
+
   Serial.printf("[SYS] heap=%u\n", (unsigned)ESP.getFreeHeap());
 }
 
