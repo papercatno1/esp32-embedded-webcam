@@ -130,7 +130,57 @@ got_line:
       release(fb);
       s_frames++;
     }
-    send_headers(nc, "text/plain; charset=utf-8", strlen(msg));
+    send_headers(nc, "text/plain; charset=utf-8", (int)strlen(msg));
+    send_all(nc, (const uint8_t *)msg, strlen(msg), 500);
+    close_graceful(nc);
+    return;
+  }
+
+  if (line.startsWith("GET /list")) {
+    static char lb[1600];
+    notes_photo_list(lb, sizeof(lb));
+    send_headers(nc, "application/json", (int)strlen(lb));
+    send_all(nc, (const uint8_t *)lb, strlen(lb), 800);
+    close_graceful(nc);
+    return;
+  }
+
+  if (line.startsWith("GET /photo?n=")) {
+    const char *nm = line.c_str() + 13;
+    char name[32];
+    size_t k = 0;
+    while (nm[k] && nm[k] != ' ' && nm[k] != '&' && k < sizeof(name) - 1) { name[k] = nm[k]; k++; }
+    name[k] = 0;
+    File f = notes_photo_open(name);
+    if (!f) {
+      const char *e = "没有这张照片";
+      send_headers(nc, "text/plain; charset=utf-8", (int)strlen(e));
+      send_all(nc, (const uint8_t *)e, strlen(e), 500);
+    } else {
+      nc.printf("HTTP/1.1 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n"
+                "Content-Disposition: attachment; filename=\"%s\"\r\n"
+                "Cache-Control: no-store\r\nConnection: close\r\n\r\n",
+                (unsigned)f.size(), name);
+      uint8_t chunk[1024];
+      while (f.available()) {
+        int r = f.read(chunk, sizeof(chunk));
+        if (r <= 0) break;
+        if (!send_all(nc, chunk, (size_t)r, 1500)) break;
+      }
+      f.close();
+    }
+    close_graceful(nc);
+    return;
+  }
+
+  if (line.startsWith("GET /del?n=")) {
+    const char *nm = line.c_str() + 11;
+    char name[32];
+    size_t k = 0;
+    while (nm[k] && nm[k] != ' ' && nm[k] != '&' && k < sizeof(name) - 1) { name[k] = nm[k]; k++; }
+    name[k] = 0;
+    const char *msg = notes_photo_del(name) ? "已删除" : "删除失败";
+    send_headers(nc, "text/plain; charset=utf-8", (int)strlen(msg));
     send_all(nc, (const uint8_t *)msg, strlen(msg), 500);
     close_graceful(nc);
     return;
@@ -162,44 +212,68 @@ got_line:
   }
 
   if (line.startsWith("GET / ") || line.startsWith("GET /index")) {
-    static const char page[] =
-        "<!doctype html><meta charset=utf-8>"
-        "<meta name=viewport content='width=device-width,initial-scale=1'>"
-        "<title>ESP32 照相</title>"
-        "<body style='margin:0;background:#0e1114;color:#e8eaed;font-family:system-ui,sans-serif'>"
-        "<div style='display:flex;align-items:center;gap:10px;padding:10px 14px;"
-        "border-bottom:1px solid #23282d'><b>ESP32-S3 · 照相</b>"
-        "<span style='color:#8b949e;font-size:13px'>实时流</span></div>"
-        "<img id='v' src='/stream' style='width:100%;display:block;background:#000'>"
-        "<div style='padding:12px 14px;display:flex;gap:10px;flex-wrap:wrap'>"
-        "<button onclick='shot()' style='background:#2563eb;color:#fff;border:0;"
-        "padding:11px 18px;border-radius:8px;font-size:15px'>拍一张存卡</button>"
-        "<button onclick='snap()' style='background:#1f2937;color:#e5e7eb;border:0;"
-        "padding:11px 18px;border-radius:8px;font-size:15px'>看当前帧</button>"
-        "<button onclick='location.reload()' style='background:#1f2937;color:#e5e7eb;"
-        "border:0;padding:11px 18px;border-radius:8px;font-size:15px'>刷新</button></div>"
-        "<div id='msg' style='padding:0 14px 10px;color:#7ee2a8;font-size:14px;"
-        "min-height:20px'></div>"
-        "<div id='ov' style='display:none;position:fixed;top:0;left:0;right:0;bottom:0;"
-        "background:#000d;z-index:9;align-items:center;justify-content:center;"
-        "flex-direction:column;gap:14px'>"
-        "<img id='p' style='max-width:94%;max-height:76%;border-radius:6px'>"
-        "<button onclick=\"document.getElementById('ov').style.display='none'\" "
-        "style='background:#374151;color:#fff;border:0;padding:12px 22px;"
-        "border-radius:8px;font-size:15px'>关闭</button></div>"
-        "<div style='padding:0 14px 16px;color:#8b949e;font-size:12px'>"
-        "按钮都在本页执行，画面不会中断；看当前帧只弹窗，关掉就回到实时流。</div>"
-        "<script>"
-        "var v=document.getElementById('v');"
-        "v.onerror=function(){setTimeout(function(){v.src='/stream?t='+Date.now()},1200)};"
-        "function shot(){var m=document.getElementById('msg');m.textContent='拍摄中…';"
-        "fetch('/shot').then(function(r){return r.text()}).then(function(t){"
-        "m.textContent=t;setTimeout(function(){m.textContent=''},2500)}).catch(function(){"
-        "m.textContent='拍摄失败'})}"
-        "function snap(){fetch('/capture').then(function(r){return r.blob()}).then(function(b){"
-        "document.getElementById('p').src=URL.createObjectURL(b);"
-        "document.getElementById('ov').style.display='flex'}).catch(function(){})}"
-        "</script>";
+    static const char page[] PROGMEM = R"HTML(
+<!doctype html><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>ESP32 照相</title>
+<body style="margin:0;background:#0e1114;color:#e8eaed;font-family:system-ui,sans-serif">
+<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid #23282d">
+  <b>ESP32-S3 · 照相</b><span style="color:#8b949e;font-size:13px">实时流</span></div>
+<img id="v" src="/stream" style="width:100%;display:block;background:#000">
+<div style="padding:12px 14px;display:flex;gap:10px;flex-wrap:wrap">
+  <button onclick="shot()" style="background:#2563eb;color:#fff;border:0;padding:11px 18px;border-radius:8px;font-size:15px">拍一张存卡</button>
+  <button onclick="snap()" style="background:#1f2937;color:#e5e7eb;border:0;padding:11px 18px;border-radius:8px;font-size:15px">看当前帧</button>
+  <button onclick="album()" style="background:#1f2937;color:#e5e7eb;border:0;padding:11px 18px;border-radius:8px;font-size:15px">卡内照片</button>
+  <button onclick="location.reload()" style="background:#1f2937;color:#e5e7eb;border:0;padding:11px 18px;border-radius:8px;font-size:15px">刷新</button>
+</div>
+<div id="msg" style="padding:0 14px 6px;color:#7ee2a8;font-size:14px;min-height:20px"></div>
+<div id="al" style="display:none;padding:0 14px 16px"></div>
+<div id="ov" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#000d;z-index:9;align-items:center;justify-content:center;flex-direction:column;gap:14px">
+  <img id="p" style="max-width:94%;max-height:76%;border-radius:6px">
+  <button onclick="document.getElementById('ov').style.display='none'" style="background:#374151;color:#fff;border:0;padding:12px 22px;border-radius:8px;font-size:15px">关闭</button>
+</div>
+<div style="padding:0 14px 16px;color:#8b949e;font-size:12px">按钮都在本页执行，画面不会中断；卡内照片可下载到手机或删除。</div>
+<script>
+var v=document.getElementById('v');
+v.onerror=function(){setTimeout(function(){v.src='/stream?t='+Date.now()},1200)};
+function msg(t){var m=document.getElementById('msg');m.textContent=t;setTimeout(function(){m.textContent=''},2500)}
+function shot(){msg('拍摄中…');fetch('/shot').then(function(r){return r.text()}).then(msg).catch(function(){msg('拍摄失败')})}
+function snap(){fetch('/capture').then(function(r){return r.blob()}).then(function(b){
+  document.getElementById('p').src=URL.createObjectURL(b);
+  document.getElementById('ov').style.display='flex'}).catch(function(){})}
+function album(){
+  var d=document.getElementById('al');
+  if(d.style.display==='block'){d.style.display='none';return}
+  d.style.display='block';loadAlbum();
+}
+function loadAlbum(){
+  var d=document.getElementById('al');d.innerHTML='读取中…';
+  fetch('/list').then(function(r){return r.json()}).then(function(a){
+    if(!a.length){d.innerHTML='<div style="color:#8b949e;font-size:14px">卡里还没有照片</div>';return}
+    d.innerHTML='<div style="color:#8b949e;font-size:13px;padding:4px 0">共 '+a.length+' 张</div>';
+    a.forEach(function(x){
+      var row=document.createElement('div');
+      row.style.cssText='display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid #23282d';
+      var nm=document.createElement('span');
+      nm.textContent=x.n;nm.style.cssText='flex:1;font-size:14px';
+      var sz=document.createElement('span');
+      sz.textContent=Math.max(1,Math.round(x.s/1024))+'KB';sz.style.cssText='color:#8b949e;font-size:12px';
+      var dl=document.createElement('a');
+      dl.href='/photo?n='+x.n;dl.textContent='下载';
+      dl.setAttribute('download',x.n);dl.style.cssText='color:#4da3ff;font-size:14px;text-decoration:none';
+      var de=document.createElement('button');
+      de.textContent='删除';de.style.cssText='background:#7f1d1d;color:#fff;border:0;border-radius:6px;padding:6px 12px;font-size:13px';
+      de.onclick=function(){
+        if(!confirm('确定删除 '+x.n+' ？'))return;
+        fetch('/del?n='+x.n).then(function(r){return r.text()}).then(function(t){msg(t);loadAlbum()});
+      };
+      row.appendChild(nm);row.appendChild(sz);row.appendChild(dl);row.appendChild(de);
+      d.appendChild(row);
+    });
+  }).catch(function(){d.innerHTML='<div style="color:#f88;font-size:14px">读不到目录</div>'});
+}
+</script>
+)HTML";
     send_headers(nc, "text/html; charset=utf-8", (int)strlen(page));
     send_all(nc, (const uint8_t *)page, strlen(page), 800);
     close_graceful(nc);

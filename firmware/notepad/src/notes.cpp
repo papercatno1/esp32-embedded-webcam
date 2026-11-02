@@ -409,3 +409,53 @@ int notes_save_jpeg(const uint8_t *buf, size_t len) {
   return (n == len) ? 1 : 0;
 }
 
+// ---------------- 卡上照片：列表 / 打开 / 删除 ----------------
+static bool photo_name_ok(const char *n) {
+  if (!n || !*n) return false;
+  if (strstr(n, "..") || strchr(n, '/') || strchr(n, '\\')) return false;
+  size_t L = strlen(n);
+  if (L < 5 || L > 28) return false;
+  const char *e = n + L - 4;
+  return (e[0] == '.' && (e[1] == 'j' || e[1] == 'J') &&
+          (e[2] == 'p' || e[2] == 'P') && (e[3] == 'g' || e[3] == 'G'));
+}
+
+int notes_photo_list(char *buf, size_t cap) {
+  if (!buf || cap < 8) return 0;
+  size_t used = 0;
+  int n = 0;
+  buf[used++] = '[';
+  File dir = img_fs().open("/");
+  if (dir) {
+    for (File f = dir.openNextFile(); f; f = dir.openNextFile()) {
+      const char *nm = f.name();
+      const char *base = nm ? strrchr(nm, '/') : nullptr;
+      if (base) base++; else base = nm;
+      if (!f.isDirectory() && photo_name_ok(base)) {
+        int w = snprintf(buf + used, cap - used, "%s{\"n\":\"%s\",\"s\":%u}",
+                         n ? "," : "", base, (unsigned)f.size());
+        if (w <= 0 || used + (size_t)w + 2 >= cap) { f.close(); break; }
+        used += (size_t)w;
+        n++;
+      }
+      f.close();
+    }
+    dir.close();
+  }
+  snprintf(buf + used, cap - used, "]");
+  return n;
+}
+
+File notes_photo_open(const char *base) {
+  if (!photo_name_ok(base)) return File();
+  char p[32];
+  snprintf(p, sizeof(p), "/%s", base);
+  return img_fs().open(p, FILE_READ);
+}
+
+bool notes_photo_del(const char *base) {
+  if (!photo_name_ok(base)) return false;
+  char p[32];
+  snprintf(p, sizeof(p), "/%s", base);
+  return img_fs().remove(p);
+}
